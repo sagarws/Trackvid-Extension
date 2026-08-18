@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    width: 380px;
+    min-height: 560px;
+  }
+
+  body {
+    font-family: theme("fontFamily.sans");
+    background: #ffffff;
+    color: theme("colors.ink.900");
+    overflow-x: hidden;
+  }
+}
+
+@layer components {
+  .dot-grid {
+    background-image: radial-gradient(
+      circle at center,
+      rgba(99, 102, 241, 0.28) 1.2px,
+      transparent 1.6px
+    );
+    background-size: 14px 14px;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 w-full rounded-xl
+           bg-ink-900 px-4 py-3 text-sm font-semibold text-white
+           shadow-soft transition-all hover:bg-ink-800 active:scale-[0.98]
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 w-full rounded-xl
+           border border-ink-300/60 bg-white px-4 py-3 text-sm font-semibold
+           text-ink-900 transition-all hover:border-brand-400 hover:text-brand-600
+           active:scale-[0.98];
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-ink-300/70 bg-white px-3.5 py-2.5
+           text-sm text-ink-900 placeholder:text-ink-400
+           outline-none transition
+           focus:border-brand-500 focus:ring-4 focus:ring-brand-500/15;
+  }
+
+  .field-label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-500;
+  }
+
+  .status-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1
+           text-[11px] font-semibold uppercase tracking-wide;
+  }
+}
