@@ -3,9 +3,9 @@ import pkg from "./package.json";
 
 export default defineManifest({
   manifest_version: 3,
-  name: "TrackVid — Myntra Session Capture",
+  name: "TrackVid — Seller Session Capture",
   description:
-    "Captures Myntra partner-portal session cookies after login and syncs them to TrackVid.",
+    "Captures Myntra and Flipkart seller-portal sessions after login and syncs them to TrackVid.",
   version: pkg.version,
   action: {
     default_popup: "src/popup/index.html",
@@ -25,6 +25,7 @@ export default defineManifest({
   host_permissions: [
     "https://*.myntra.com/*",
     "https://*.myntrainfo.com/*",
+    "https://seller.flipkart.com/*",
     "http://localhost/*",
     "http://127.0.0.1/*",
     "https://*/*",

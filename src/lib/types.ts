@@ -13,7 +13,12 @@ export type VerifyStatus =
   | "verified"   // token stored
   | "expired";   // token cleared after a 401
 
+// Which seller portal a capture came from. Older stored captures predate the
+// field, so readers treat a missing value as Myntra.
+export type CapturedPlatform = "myntra" | "flipkart";
+
 export interface CapturedSession {
+  platform?: CapturedPlatform;
   username: string;
   userEmail: string;
   cookies: {
@@ -21,6 +26,9 @@ export interface CapturedSession {
     session?: string;
     [key: string]: string | undefined;
   };
+  // Flipkart only: the fk-csrf-token that signs its API calls. Not a cookie,
+  // so it is stored beside the jar rather than inside it.
+  csrfToken?: string;
   capturedAt: string;
   syncedAt?: string;
   error?: string;

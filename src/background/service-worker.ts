@@ -1,13 +1,23 @@
 // -----------------------------------------------------------------------------
-// TrackVid — Myntra session capture (MV3 service worker)
+// TrackVid — marketplace session capture (MV3 service worker)
 // -----------------------------------------------------------------------------
-// Detects a successful Myntra partner-portal login in this browser, harvests
-// the `erp.at` and `session` cookies from Chrome's cookie store, and POSTs
-// them to the TrackVid backend. Auth: the extension logs the operator into
-// TrackVid (via email+password OR the "Have User ID" impersonation shortcut),
-// stores the returned access token, and attaches it as a Bearer header on
-// every ingest request. On a 401 the token is cleared and the popup asks the
-// operator to click Verify again.
+// Detects a successful seller-portal login in this browser, harvests the
+// session material, and POSTs it to the TrackVid backend. Auth: the extension
+// logs the operator into TrackVid (via email+password OR the "Have User ID"
+// impersonation shortcut), stores the returned access token, and attaches it as
+// a Bearer header on every ingest request. On a 401 the token is cleared and the
+// popup asks the operator to click Verify again.
+//
+// TWO platforms are supported, described by the PLATFORMS table below:
+//
+//   Myntra   — cookies only (`erp.at` + `session`), POST /api/myntra/ingest-session
+//   Flipkart — cookies PLUS the `fk-csrf-token` header that signs every one of
+//              its GraphQL calls, POST /api/flipkart/ingest-session
+//
+// The Flipkart token is not a cookie: the portal keeps it in page storage and
+// attaches it as a request header. We already read request headers to get at
+// HttpOnly+Partitioned cookies, so the same listener sniffs the token — no
+// content script and no page-context access needed.
 // -----------------------------------------------------------------------------
 
 import type {
@@ -18,27 +28,94 @@ import type {
   VerifyStatus,
 } from "@/lib/types";
 
-const LOGIN_URL_PATTERNS = [
-  "https://accounts.myntra.com/*login*",
-  "https://accounts.myntrainfo.com/*login*",
-  "https://partners.myntrainfo.com/*login*",
-];
+export type PlatformKey = "myntra" | "flipkart";
 
-const REQUIRED_COOKIES = ["erp.at", "session"] as const;
+interface PlatformSpec {
+  key: PlatformKey;
+  label: string;
+  // POSTs to these URLs mean "a login just happened" — success is judged by the
+  // response status in onCompleted.
+  loginUrlPatterns: string[];
+  // Every URL whose headers we mine for cookies (and, on Flipkart, the csrf
+  // token). Wider than the login patterns on purpose: the session material is
+  // set across the portal, not only on the login call.
+  allUrlPatterns: string[];
+  // chrome.cookies.getAll({domain}) matches subdomains, so the dotted entries
+  // catch everything; the explicit hosts just make the debug log readable.
+  cookieDomains: string[];
+  // Cookies without which the capture is worthless. Empty = "any non-empty jar",
+  // used for Flipkart where the session cookie names are not fixed.
+  requiredCookies: readonly string[];
+  // Flipkart only: the request header carrying the token that signs its API
+  // calls. When set, a capture without it is rejected.
+  csrfHeader?: string;
+  // Flipkart only: the cookie that MUST hold the same value as csrfHeader.
+  // Flipkart uses double-submit CSRF — the server compares header against
+  // cookie and answers 403 EBADCSRFTOKEN when they differ — so a capture whose
+  // jar lacks this cookie is dead on arrival however fresh it looks.
+  csrfCookie?: string;
+  ingestPath: string;
+}
 
-// Diagnostic scan list — chrome.cookies.getAll({domain}) matches subdomains,
-// so the `.myntrainfo.com` / `.myntra.com` entries catch everything, but the
-// explicit hosts make the per-domain log line easy to read while debugging.
-const DIAG_COOKIE_DOMAINS = [
-  "myntrainfo.com",
-  ".myntrainfo.com",
-  "partners.myntrainfo.com",
-  "partnersapi.myntrainfo.com",
-  "myntra.com",
-  ".myntra.com",
-  "accounts.myntra.com",
-  "www.myntra.com",
-];
+const PLATFORMS: Record<PlatformKey, PlatformSpec> = {
+  myntra: {
+    key: "myntra",
+    label: "Myntra",
+    loginUrlPatterns: [
+      "https://accounts.myntra.com/*login*",
+      "https://accounts.myntrainfo.com/*login*",
+      "https://partners.myntrainfo.com/*login*",
+    ],
+    allUrlPatterns: ["https://*.myntra.com/*", "https://*.myntrainfo.com/*"],
+    cookieDomains: [
+      "myntrainfo.com",
+      ".myntrainfo.com",
+      "partners.myntrainfo.com",
+      "partnersapi.myntrainfo.com",
+      "myntra.com",
+      ".myntra.com",
+      "accounts.myntra.com",
+      "www.myntra.com",
+    ],
+    requiredCookies: ["erp.at", "session"] as const,
+    ingestPath: "/api/myntra/ingest-session",
+  },
+  flipkart: {
+    key: "flipkart",
+    label: "Flipkart",
+    // Flipkart's login is one or two calls: POST /login, and POST /verifyOtp
+    // when an OTP is challenged (it is not always). Both are watched — /login
+    // also carries the username in its body — and which of them yields a usable
+    // session is decided by requiredCookies, not by the URL.
+    loginUrlPatterns: [
+      "https://seller.flipkart.com/login*",
+      "https://seller.flipkart.com/verifyOtp*",
+    ],
+    allUrlPatterns: ["https://seller.flipkart.com/*"],
+    cookieDomains: [
+      "flipkart.com",
+      ".flipkart.com",
+      "seller.flipkart.com",
+    ],
+    // `sellerId` is the authenticated-seller marker: it is present in every
+    // working jar we have and is not set while login is still mid-MFA, which is
+    // what lets one capture path serve both the OTP and no-OTP flows. The csrf
+    // cookie below is required too — see csrfCookie.
+    requiredCookies: ["sellerId"] as const,
+    csrfHeader: "fk-csrf-token",
+    csrfCookie: "XyZ7pQ9rS2T1uV8wA3bC6dE4fG0h",
+    ingestPath: "/api/flipkart/ingest-session",
+  },
+};
+
+const PLATFORM_LIST = Object.values(PLATFORMS);
+
+// Which platform a URL belongs to, or null when it's neither.
+function platformForUrl(url: string): PlatformSpec | null {
+  if (/^https:\/\/([a-z0-9-]+\.)*myntra(info)?\.com\//i.test(url)) return PLATFORMS.myntra;
+  if (/^https:\/\/seller\.flipkart\.com\//i.test(url)) return PLATFORMS.flipkart;
+  return null;
+}
 
 // TEMPORARY diagnostic logging. Flip to false once cookie capture is stable.
 const TVX_DEBUG = true;
@@ -63,9 +140,18 @@ const truncVal = (v: string) =>
 // every Myntra request the browser makes and pull from it at capture time.
 // -----------------------------------------------------------------------------
 
-const headerJar: Record<string, string> = {};
+// One jar per platform — a Myntra cookie must never leak into a Flipkart
+// capture, and both portals can be open in the same browser at once.
+const headerJars: Record<PlatformKey, Record<string, string>> = {
+  myntra: {},
+  flipkart: {},
+};
 
-function ingestSetCookieHeader(raw: string, sourceUrl: string) {
+// Flipkart's fk-csrf-token, sniffed from request headers. Not a cookie, so it
+// lives beside the jar rather than in it.
+const csrfTokens: Partial<Record<PlatformKey, string>> = {};
+
+function ingestSetCookieHeader(headerJar: Record<string, string>, raw: string, sourceUrl: string) {
   // Chrome may combine multiple Set-Cookie into one string separated by \n
   // (rare but happens). Handle both shapes.
   for (const line of raw.split(/\r?\n/)) {
@@ -82,7 +168,7 @@ function ingestSetCookieHeader(raw: string, sourceUrl: string) {
   }
 }
 
-function ingestCookieRequestHeader(raw: string, sourceUrl: string) {
+function ingestCookieRequestHeader(headerJar: Record<string, string>, raw: string, sourceUrl: string) {
   for (const pair of raw.split(";")) {
     const idx = pair.indexOf("=");
     if (idx <= 0) continue;
@@ -101,9 +187,20 @@ function ingestCookieRequestHeader(raw: string, sourceUrl: string) {
 // Backend base URL is env-only now — the popup no longer exposes it.
 const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL ?? "").trim();
 
+// Secure mode: when true, a captured session is held locally and only POSTed
+// after the operator has opened AND closed the extension popup. This gives
+// them a chance to review the capture before it leaves the machine. When
+// false/unset, sync runs immediately on capture (the original flow).
+const SECURE_MODE =
+  String(import.meta.env.VITE_SECURE_MODE ?? "").toLowerCase() === "true";
+
 const STORAGE_KEYS = {
   settings: "tv.settings",
   lastCapture: "tv.lastCapture",
+  // Only meaningful in SECURE_MODE: set when a capture is waiting for the next
+  // popup-close to trigger its upload. Persisted (not just in-memory) because
+  // the service worker can hibernate between capture and popup close.
+  pendingSecureSync: "tv.pendingSecureSync",
 } as const;
 
 // -----------------------------------------------------------------------------
@@ -163,6 +260,15 @@ async function loadLastCapture(): Promise<CapturedSession | null> {
 
 async function saveLastCapture(c: CapturedSession | null): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEYS.lastCapture]: c });
+}
+
+async function loadPendingSecureSync(): Promise<boolean> {
+  const raw = await chrome.storage.local.get(STORAGE_KEYS.pendingSecureSync);
+  return raw[STORAGE_KEYS.pendingSecureSync] === true;
+}
+
+async function savePendingSecureSync(flag: boolean): Promise<void> {
+  await chrome.storage.local.set({ [STORAGE_KEYS.pendingSecureSync]: flag });
 }
 
 // Mirrors the popup's field validation (SettingsScreen.tsx). Checked here too
@@ -304,6 +410,7 @@ async function performLogout(): Promise<BgState> {
   // autoSync) so the operator doesn't have to retype on re-verify.
   await patchSettings({ accessToken: "", tokenSavedAt: "", password: "" });
   await saveLastCapture(null);
+  await savePendingSecureSync(false);
   verifyMessage = "Logged out.";
   setStatus("idle");
   return currentState();
@@ -313,7 +420,7 @@ async function performLogout(): Promise<BgState> {
 // Cookie harvest
 // -----------------------------------------------------------------------------
 
-async function harvestCookies(): Promise<Record<string, string>> {
+async function harvestCookies(spec: PlatformSpec): Promise<Record<string, string>> {
   const jar: Record<string, string> = {};
   // Scan the wider diagnostic list — the harvest itself doesn't care where a
   // cookie is scoped, and this way the diag log below shows every hit.
@@ -326,7 +433,7 @@ async function harvestCookies(): Promise<Record<string, string>> {
     httpOnly: boolean;
   }> = [];
 
-  for (const domain of DIAG_COOKIE_DOMAINS) {
+  for (const domain of spec.cookieDomains) {
     let cookies: chrome.cookies.Cookie[] = [];
     try {
       cookies = await chrome.cookies.getAll({ domain });
@@ -354,10 +461,10 @@ async function harvestCookies(): Promise<Record<string, string>> {
   }
   for (const k of Object.keys(jar)) if (k.endsWith("__d")) delete jar[k];
 
-  // Merge the header-sourced jar. Header-sourced values win — they're the
-  // ones the browser actually sends, and getAll can silently miss HttpOnly +
-  // Partitioned cookies.
-  for (const [name, value] of Object.entries(headerJar)) {
+  // Merge the header-sourced jar for THIS platform. Header-sourced values win —
+  // they're the ones the browser actually sends, and getAll can silently miss
+  // HttpOnly + Partitioned cookies.
+  for (const [name, value] of Object.entries(headerJars[spec.key])) {
     jar[name] = value;
   }
 
@@ -369,12 +476,20 @@ async function harvestCookies(): Promise<Record<string, string>> {
       );
     }
     console.groupEnd();
+    const hj = headerJars[spec.key];
     dlog(
-      `headerJar size=${Object.keys(headerJar).length} keys=[${Object.keys(headerJar).join(", ")}]`
+      `[${spec.key}] headerJar size=${Object.keys(hj).length} keys=[${Object.keys(hj).join(", ")}]`
     );
-    dlog("merged harvest jar keys:", Object.keys(jar));
-    for (const req of REQUIRED_COOKIES) {
+    dlog(`[${spec.key}] merged harvest jar keys:`, Object.keys(jar));
+    for (const req of spec.requiredCookies) {
       dlog(`required "${req}" → ${jar[req] ? truncVal(jar[req]) : "MISSING"}`);
+    }
+    if (spec.csrfHeader) {
+      dlog(
+        `required header "${spec.csrfHeader}" → ${
+          csrfTokens[spec.key] ? truncVal(csrfTokens[spec.key] as string) : "MISSING"
+        }`
+      );
     }
   }
 
@@ -384,24 +499,61 @@ async function harvestCookies(): Promise<Record<string, string>> {
 // Retry harvesting: cookies set by a login redirect chain don't always land in
 // Chrome's cookie store the instant the POST completes. Retry with backoff and
 // stop as soon as the required cookies appear.
-async function harvestCookiesWithRetry(): Promise<Record<string, string>> {
+async function harvestCookiesWithRetry(
+  spec: PlatformSpec
+): Promise<Record<string, string>> {
   const delays = [400, 800, 1500, 2500, 4000]; // total ~9.2s
   let last: Record<string, string> = {};
   for (let i = 0; i < delays.length; i++) {
     await new Promise((r) => setTimeout(r, delays[i]));
-    dlog(`harvest attempt ${i + 1}/${delays.length} (after ${delays[i]}ms wait)`);
-    last = await harvestCookies();
-    if (hasRequiredCookies(last)) {
-      dlog(`✔ required cookies present on attempt ${i + 1}`);
+    dlog(`[${spec.key}] harvest attempt ${i + 1}/${delays.length} (after ${delays[i]}ms wait)`);
+    last = await harvestCookies(spec);
+    if (hasRequiredMaterial(spec, last)) {
+      dlog(`✔ [${spec.key}] required material present on attempt ${i + 1}`);
       return last;
     }
   }
-  dlog("✘ required cookies never appeared after all retries");
+  dlog(`✘ [${spec.key}] required material never appeared after all retries`);
   return last;
 }
 
-function hasRequiredCookies(jar: Record<string, string>): boolean {
-  return REQUIRED_COOKIES.every((n) => !!jar[n]);
+// "Enough to be worth sending". Myntra names its two cookies explicitly;
+// Flipkart takes any non-empty jar but insists on the csrf token, without which
+// the automation cannot sign a single API call.
+function hasRequiredMaterial(
+  spec: PlatformSpec,
+  jar: Record<string, string>
+): boolean {
+  if (spec.requiredCookies.length > 0) {
+    if (!spec.requiredCookies.every((n) => !!jar[n])) return false;
+  } else if (Object.keys(jar).length === 0) {
+    return false;
+  }
+  // Double-submit platforms need BOTH halves. Sending a token with no matching
+  // cookie produces a session that looks healthy and 403s on its first call.
+  if (spec.csrfCookie && !jar[spec.csrfCookie]) return false;
+  if (spec.csrfHeader && !csrfToken(spec, jar)) return false;
+  return true;
+}
+
+// The value to send as `csrfToken`. The COOKIE is the source of truth: it is the
+// half the server compares against, and taking it from the jar guarantees the
+// pair matches even if the SPA rotated the token after we sniffed a header.
+// The sniffed header is only a fallback for a jar that somehow lacks the cookie.
+function csrfToken(
+  spec: PlatformSpec,
+  jar: Record<string, string>
+): string | undefined {
+  if (spec.csrfCookie && jar[spec.csrfCookie]) {
+    const sniffed = csrfTokens[spec.key];
+    if (sniffed && sniffed !== jar[spec.csrfCookie]) {
+      dlog(
+        `[${spec.key}] header token differs from cookie "${spec.csrfCookie}" — using the cookie`
+      );
+    }
+    return jar[spec.csrfCookie];
+  }
+  return csrfTokens[spec.key];
 }
 
 // -----------------------------------------------------------------------------
@@ -452,7 +604,8 @@ async function sendToBackend(
 ): Promise<void> {
   if (!BACKEND_URL) throw new Error("Backend URL is not configured (VITE_BACKEND_URL).");
   if (!settings.accessToken) throw new Error("Not verified — click Verify first.");
-  const url = BACKEND_URL.replace(/\/+$/, "") + "/api/myntra/ingest-session";
+  const spec = PLATFORMS[capture.platform ?? "myntra"];
+  const url = BACKEND_URL.replace(/\/+$/, "") + spec.ingestPath;
 
   const res = await fetch(url, {
     method: "POST",
@@ -463,6 +616,8 @@ async function sendToBackend(
     body: JSON.stringify({
       username: capture.username,
       jar: capture.cookies,
+      // Only Flipkart's endpoint expects this; Myntra's ignores the extra key.
+      ...(capture.csrfToken ? { csrfToken: capture.csrfToken } : {}),
       source: "chrome-extension",
       capturedAt: capture.capturedAt,
     }),
@@ -485,38 +640,54 @@ async function sendToBackend(
 // Login-detected pipeline
 // -----------------------------------------------------------------------------
 
-async function onLoginDetected(usernameHint: string | null): Promise<void> {
+async function onLoginDetected(
+  spec: PlatformSpec,
+  usernameHint: string | null
+): Promise<void> {
   const settings = await loadSettings();
   if (!settings.accessToken) {
     setStatus(
       "error",
-      "Myntra login detected, but TrackVid isn't verified. Open the extension and click Verify."
+      `${spec.label} login detected, but TrackVid isn't verified. Open the extension and click Verify.`
     );
     notify(
       "Verification required",
-      "TrackVid saw a Myntra login but is not verified. Click Verify in the popup."
+      `TrackVid saw a ${spec.label} login but is not verified. Click Verify in the popup.`
     );
     return;
   }
 
-  setStatus("capturing", `Detected login for ${usernameHint || "Myntra user"}`);
-  dlog("onLoginDetected — usernameHint:", usernameHint);
+  setStatus("capturing", `Detected login for ${usernameHint || `${spec.label} user`}`);
+  dlog(`onLoginDetected [${spec.key}] — usernameHint:`, usernameHint);
 
-  const jar = await harvestCookiesWithRetry();
-  if (!hasRequiredCookies(jar)) {
+  const jar = await harvestCookiesWithRetry(spec);
+  if (!hasRequiredMaterial(spec, jar)) {
     const seenNames = Object.keys(jar);
+    const missing: string[] = spec.requiredCookies.filter((n) => !jar[n]);
+    if (spec.requiredCookies.length === 0 && seenNames.length === 0) {
+      missing.push("any cookie");
+    }
+    if (spec.csrfCookie && !jar[spec.csrfCookie]) missing.push(`cookie ${spec.csrfCookie}`);
+    if (spec.csrfHeader && !csrfToken(spec, jar)) missing.push(spec.csrfHeader);
     const debugMsg =
-      `Login detected but required cookies missing (${REQUIRED_COOKIES.join(", ")}). ` +
+      `${spec.label} login detected but required material missing (${missing.join(", ")}). ` +
       `Saw ${seenNames.length} cookies: [${seenNames.slice(0, 12).join(", ")}${seenNames.length > 12 ? ", …" : ""}]`;
     dlog(debugMsg);
     setStatus("error", debugMsg);
     return;
   }
 
+  // Past the gate — this capture is real, so the username hint has been used
+  // and must not leak into an unrelated later login.
+  const resolvedUsername = usernameHint || inflightUsername || "(unknown)";
+  inflightUsername = null;
+
   const capture: CapturedSession = {
-    username: usernameHint || inflightUsername || "(unknown)",
+    platform: spec.key,
+    username: resolvedUsername,
     userEmail: settings.userEmail || settings.userId || "(via token)",
     cookies: jar,
+    ...(spec.csrfHeader ? { csrfToken: csrfToken(spec, jar) } : {}),
     capturedAt: new Date().toISOString(),
   };
   await saveLastCapture(capture);
@@ -526,15 +697,30 @@ async function onLoginDetected(usernameHint: string | null): Promise<void> {
     return;
   }
 
+  if (SECURE_MODE) {
+    // Hold the capture; syncPendingCapture() runs when the popup port
+    // disconnects (see chrome.runtime.onConnect below).
+    await savePendingSecureSync(true);
+    setStatus(
+      "success",
+      `${spec.label} session captured — will sync after you close the TrackVid popup.`
+    );
+    notify(
+      "TrackVid — session captured",
+      `${spec.label} session for ${capture.username} captured. Open TrackVid to review, then close it to sync.`
+    );
+    return;
+  }
+
   setStatus("syncing", "Uploading cookie jar to TrackVid…");
   try {
     await sendToBackend(capture, settings);
     capture.syncedAt = new Date().toISOString();
     await saveLastCapture(capture);
-    setStatus("success", `Session synced for ${capture.username}`);
+    setStatus("success", `${spec.label} session synced for ${capture.username}`);
     notify(
       "TrackVid — session synced",
-      `Myntra cookies for ${capture.username} were sent to the backend.`
+      `${spec.label} session for ${capture.username} was sent to the backend.`
     );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -562,6 +748,9 @@ function notify(title: string, message: string) {
 // Wire up webRequest listeners
 // -----------------------------------------------------------------------------
 
+const ALL_LOGIN_URL_PATTERNS = PLATFORM_LIST.flatMap((p) => p.loginUrlPatterns);
+const ALL_PORTAL_URL_PATTERNS = PLATFORM_LIST.flatMap((p) => p.allUrlPatterns);
+
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
     if (details.method !== "POST") return;
@@ -569,77 +758,168 @@ chrome.webRequest.onBeforeRequest.addListener(
     dlog(
       `onBeforeRequest matched: ${details.method} ${details.url} — usernameHint=${user ?? "(none)"}`
     );
+    // Flipkart's username arrives on POST /login, but the session only exists
+    // after POST /verifyOtp — so the hint has to survive between the two calls,
+    // which is exactly what inflightUsername does.
     if (user) inflightUsername = user;
   },
-  { urls: LOGIN_URL_PATTERNS },
+  { urls: ALL_LOGIN_URL_PATTERNS },
   ["requestBody"]
 );
 
 chrome.webRequest.onCompleted.addListener(
   (details) => {
     if (details.method !== "POST") return;
+    const spec = platformForUrl(details.url);
+    if (!spec) return;
+
     dlog(
-      `onCompleted matched: ${details.method} ${details.url} → status=${details.statusCode} type=${details.type}`
+      `onCompleted matched [${spec.key}]: ${details.method} ${details.url} → status=${details.statusCode} type=${details.type}`
     );
     if (details.statusCode < 200 || details.statusCode >= 400) {
       dlog("  ignored — non-2xx/3xx");
       return;
     }
-    const user = inflightUsername;
-    inflightUsername = null;
-    void onLoginDetected(user);
+
+    // Both Flipkart login calls reach here (/login, then /verifyOtp when an OTP
+    // is challenged). We do NOT gate on which one fired: Flipkart skips the OTP
+    // for some accounts entirely — the Selenium runner logs "(no OTP modal —
+    // continuing)" — so waiting for /verifyOtp would mean those accounts are
+    // never captured at all. Instead the capture is gated on evidence that a
+    // session actually exists (spec.requiredCookies), which an MFA challenge
+    // does not yet produce. A pre-OTP /login is therefore withheld on its own
+    // merits and the /verifyOtp that follows captures for real.
+
+    // NOT cleared here. A withheld capture (Flipkart's /login while the MFA is
+    // still pending) must leave the hint intact, because the username only
+    // appears in THAT request's body — clearing it would leave the /verifyOtp
+    // capture that follows with "(unknown)". onLoginDetected clears it once a
+    // capture actually succeeds.
+    void onLoginDetected(spec, inflightUsername);
   },
-  { urls: LOGIN_URL_PATTERNS }
+  { urls: ALL_LOGIN_URL_PATTERNS }
 );
 
 // -----------------------------------------------------------------------------
-// TEMPORARY diagnostic: log EVERY Myntra POST so we can see the login pattern.
+// TEMPORARY diagnostic: log EVERY portal POST so we can see the login pattern.
 // -----------------------------------------------------------------------------
 chrome.webRequest.onCompleted.addListener(
   (details) => {
     if (details.method !== "POST") return;
     dlog(`[all-POST] ${details.url} → ${details.statusCode}  type=${details.type}`);
   },
-  { urls: ["https://*.myntra.com/*", "https://*.myntrainfo.com/*"] }
+  { urls: ALL_PORTAL_URL_PATTERNS }
 );
 
 // -----------------------------------------------------------------------------
-// Cookie capture via headers — the only way to see HttpOnly + Partitioned
-// cookies in MV3. Both listeners require ["extraHeaders"] in the extraInfoSpec
-// or Chrome strips Cookie / Set-Cookie for security. This is why the earlier
-// getAll-only approach missed erp.at and session.
+// Session material captured from headers — the only way to see HttpOnly +
+// Partitioned cookies in MV3. Both listeners require ["extraHeaders"] in the
+// extraInfoSpec or Chrome strips Cookie / Set-Cookie for security. This is why
+// the earlier getAll-only approach missed erp.at and session.
+//
+// The same request-header listener also yields Flipkart's fk-csrf-token, which
+// is not a cookie at all: the portal reads it from its own storage and attaches
+// it as a header on every API call. Sniffing it here avoids a content script.
 // -----------------------------------------------------------------------------
-
-const MYNTRA_ALL_URLS = [
-  "https://*.myntra.com/*",
-  "https://*.myntrainfo.com/*",
-];
 
 chrome.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (!details.responseHeaders) return;
+    const spec = platformForUrl(details.url);
+    if (!spec) return;
     for (const h of details.responseHeaders) {
       if (h.name.toLowerCase() === "set-cookie" && h.value) {
-        ingestSetCookieHeader(h.value, details.url);
+        ingestSetCookieHeader(headerJars[spec.key], h.value, details.url);
       }
     }
   },
-  { urls: MYNTRA_ALL_URLS },
+  { urls: ALL_PORTAL_URL_PATTERNS },
   ["responseHeaders", "extraHeaders"]
 );
 
 chrome.webRequest.onSendHeaders.addListener(
   (details) => {
     if (!details.requestHeaders) return;
+    const spec = platformForUrl(details.url);
+    if (!spec) return;
     for (const h of details.requestHeaders) {
-      if (h.name.toLowerCase() === "cookie" && h.value) {
-        ingestCookieRequestHeader(h.value, details.url);
+      const name = h.name.toLowerCase();
+      if (name === "cookie" && h.value) {
+        ingestCookieRequestHeader(headerJars[spec.key], h.value, details.url);
+      }
+      if (spec.csrfHeader && name === spec.csrfHeader && h.value) {
+        if (csrfTokens[spec.key] !== h.value) {
+          csrfTokens[spec.key] = h.value;
+          dlog(`[${spec.key}] ${spec.csrfHeader}=${truncVal(h.value)} from ${details.url}`);
+        }
       }
     }
   },
-  { urls: MYNTRA_ALL_URLS },
+  { urls: ALL_PORTAL_URL_PATTERNS },
   ["requestHeaders", "extraHeaders"]
 );
+
+// -----------------------------------------------------------------------------
+// SECURE_MODE deferred sync
+// -----------------------------------------------------------------------------
+// The popup opens a long-lived port (chrome.runtime.connect) on mount. When
+// the popup window is destroyed — which Chrome does the moment it loses
+// focus — the port disconnects and this listener fires. That's the signal we
+// use in SECURE_MODE to release the held capture.
+//
+// Why a port instead of window.unload in the popup: unload/beforeunload are
+// unreliable in extension popups (the SW may be asleep, and force-close paths
+// skip them). Port disconnect is Chrome's own lifecycle signal and always
+// fires.
+// -----------------------------------------------------------------------------
+
+async function syncPendingCapture(): Promise<void> {
+  if (!SECURE_MODE) return;
+  const pending = await loadPendingSecureSync();
+  if (!pending) return;
+
+  const [settings, cap] = await Promise.all([loadSettings(), loadLastCapture()]);
+  if (!cap || cap.syncedAt) {
+    await savePendingSecureSync(false);
+    return;
+  }
+  if (!settings.accessToken) {
+    // No token — keep the pending flag; the next popup-close after Verify
+    // will retry. Surface the state so the popup shows a useful message
+    // next time it opens.
+    setStatus("error", "Captured session held — click Verify to enable sync.");
+    return;
+  }
+
+  const spec = PLATFORMS[cap.platform ?? "myntra"];
+  setStatus("syncing", "Uploading cookie jar to TrackVid…");
+  try {
+    await sendToBackend(cap, settings);
+    cap.syncedAt = new Date().toISOString();
+    await saveLastCapture(cap);
+    await savePendingSecureSync(false);
+    setStatus("success", `${spec.label} session synced for ${cap.username}`);
+    notify(
+      "TrackVid — session synced",
+      `${spec.label} session for ${cap.username} was sent to the backend.`
+    );
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    cap.error = msg;
+    await saveLastCapture(cap);
+    // Leave pending=true so the next popup close retries.
+    setStatus("error", msg);
+  }
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "popup") return;
+  dlog("popup opened (port connected)");
+  port.onDisconnect.addListener(() => {
+    dlog("popup closed (port disconnected)");
+    void syncPendingCapture();
+  });
+});
 
 // -----------------------------------------------------------------------------
 // Popup ↔ worker messaging
@@ -698,6 +978,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
         case "CLEAR_LAST": {
           await saveLastCapture(null);
+          await savePendingSecureSync(false);
           setStatus("idle");
           sendResponse(await currentState());
           return;
@@ -705,8 +986,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         case "HARVEST_NOW": {
           // TEMPORARY diagnostic hook. Call from the popup or service-worker
           // devtools console: chrome.runtime.sendMessage({type:"HARVEST_NOW"})
-          dlog("HARVEST_NOW — forcing a fresh cookie scan");
-          void onLoginDetected(null);
+          // Optional { platform } picks which portal to scan; defaults to
+          // whichever has already yielded session material, else Myntra.
+          const wanted = (message.platform as PlatformKey) || null;
+          const spec =
+            (wanted && PLATFORMS[wanted]) ||
+            PLATFORM_LIST.find((pl) => Object.keys(headerJars[pl.key]).length > 0) ||
+            PLATFORMS.myntra;
+          dlog(`HARVEST_NOW — forcing a fresh scan for ${spec.key}`);
+          void onLoginDetected(spec, null);
           sendResponse(await currentState());
           return;
         }
