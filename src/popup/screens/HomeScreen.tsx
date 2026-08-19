@@ -1,7 +1,5 @@
 import {
   ArrowRight,
-  CheckCircle2,
-  Cookie,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
@@ -9,23 +7,28 @@ import {
 } from "lucide-react";
 import { StatusIllustration } from "../components/StatusIllustration";
 import { StatusChip } from "../components/StatusChip";
+import { CredentialsList } from "../components/CredentialsList";
 import { cn } from "@/lib/cn";
 import type { BgState } from "@/lib/types";
 
 interface HomeScreenProps {
   state: BgState;
+  credentialsLoading: boolean;
   onOpenSettings: () => void;
   onVerify: () => void;
   onResync: () => void;
+  onRefreshCredentials: () => void;
 }
 
 export function HomeScreen({
   state,
+  credentialsLoading,
   onOpenSettings,
   onVerify,
   onResync,
+  onRefreshCredentials,
 }: HomeScreenProps) {
-  const { status, lastCapture, settings, lastMessage, verify } = state;
+  const { status, lastCapture, lastMessage, verify, credentials } = state;
   const configured = verify === "verified";
 
   const heading = (() => {
@@ -101,54 +104,25 @@ export function HomeScreen({
         </div>
       </div>
 
-      <div className="mt-4 flex flex-1 flex-col px-5">
-        <h2 className="text-center text-[17px] font-bold tracking-tight text-ink-900">
+      <div className="mt-3 flex min-h-0 flex-1 flex-col px-5">
+        <h2 className="text-center text-[15px] font-bold tracking-tight text-ink-900">
           {heading}
         </h2>
-        <p className="mx-auto mt-2 max-w-[300px] text-center text-[13px] leading-relaxed text-ink-500">
+        <p className="mx-auto mt-1 max-w-[300px] text-center text-[12px] leading-snug text-ink-500">
           {description}
         </p>
 
-        {lastCapture && (
-          <div className="mt-4 rounded-xl border border-ink-300/40 bg-white p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-              <span className="text-xs font-semibold text-ink-900">
-                Last capture
-              </span>
-              <span className="ml-auto text-[10px] text-ink-400">
-                {new Date(lastCapture.capturedAt).toLocaleString()}
-              </span>
-            </div>
-            <dl className="space-y-1.5 text-[11px]">
-              <div className="flex items-center gap-2">
-                <dt className="w-20 text-ink-400">Account</dt>
-                <dd className="truncate font-medium text-ink-900">
-                  {lastCapture.username}
-                </dd>
-              </div>
-              <div className="flex items-center gap-2">
-                <dt className="w-20 text-ink-400">User</dt>
-                <dd className="truncate text-ink-900">
-                  {settings.useUserId ? settings.userId : lastCapture.userEmail}
-                </dd>
-              </div>
-              <div className="flex items-center gap-2">
-                <dt className="w-20 text-ink-400">Cookies</dt>
-                <dd className="flex items-center gap-1 text-ink-900">
-                  <Cookie className="h-3 w-3 text-brand-500" />
-                  <span>
-                    erp.at
-                    {lastCapture.cookies["erp.at"] ? " ✓" : " ✗"} · session
-                    {lastCapture.cookies.session ? " ✓" : " ✗"}
-                  </span>
-                </dd>
-              </div>
-            </dl>
+        {configured && (
+          <div className="mt-3 flex min-h-0 flex-1 flex-col">
+            <CredentialsList
+              data={credentials}
+              loading={credentialsLoading}
+              onRefresh={onRefreshCredentials}
+            />
           </div>
         )}
 
-        <div className="mt-auto pb-4 pt-4">
+        <div className={cn("pb-4 pt-3", !configured && "mt-auto")}>
           <div className="grid grid-cols-2 gap-2">
             {/* Left: verify status / verify button */}
             <button

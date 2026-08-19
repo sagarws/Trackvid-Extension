@@ -22,6 +22,7 @@ const DEFAULT_STATE: BgState = {
   verifyMessage: null,
   lastCapture: null,
   lastMessage: null,
+  credentials: null,
 };
 
 async function requestBg<T = unknown>(msg: unknown): Promise<T> {
@@ -50,6 +51,7 @@ export function App() {
   const [screen, setScreen] = useState<Screen>("home");
   const [state, setState] = useState<BgState>(DEFAULT_STATE);
   const [toast, setToast] = useState<ToastState>(null);
+  const [credentialsLoading, setCredentialsLoading] = useState(false);
 
   // Track the last bg error we've already surfaced so the effect that mirrors
   // spontaneous bg failures (auto-sync fails, token 401s, etc.) doesn't
@@ -69,6 +71,20 @@ export function App() {
           // opened has been seen — don't fire a toast for it.
           if (s.status === "error" && s.lastMessage) {
             lastShownErrorRef.current = s.lastMessage;
+          }
+          // Auto-fetch credentials once verified — nothing to list otherwise.
+          if (s.verify === "verified") {
+            setCredentialsLoading(true);
+            requestBg<BgState>({ type: "LIST_CREDENTIALS" })
+              .then((next) => {
+                if (mounted && next) setState(next);
+              })
+              .catch(() => {
+                /* SW will report the error via credentials.error */
+              })
+              .finally(() => {
+                if (mounted) setCredentialsLoading(false);
+              });
           }
         }
       } catch {
@@ -111,6 +127,18 @@ export function App() {
     }
   }, [state.status, state.lastMessage]);
 
+  // Refresh credentials when a spontaneous sync lands (auto-capture that
+  // completes while the popup is open). Debounced by lastCapture.syncedAt
+  // so the fetch only runs on a fresh sync, not on every state update.
+  const lastSyncedAtRef = useRef<string | null>(null);
+  useEffect(() => {
+    const syncedAt = state.lastCapture?.syncedAt ?? null;
+    if (syncedAt && syncedAt !== lastSyncedAtRef.current) {
+      lastSyncedAtRef.current = syncedAt;
+      if (state.verify === "verified") refreshCredentials();
+    }
+  }, [state.lastCapture?.syncedAt, state.verify]);
+
   const saveSettings = async (settings: Settings) => {
     const next = await requestBg<BgState>({ type: "SAVE_SETTINGS", settings });
     if (next) setState(next);
@@ -125,6 +153,9 @@ export function App() {
     if (next.verify === "verified") {
       setToast({ kind: "success", text: "Verified — ready to capture." });
       setScreen("home");
+      // First-time verify — pull the account list right away so the newly
+      // rendered HomeScreen isn't empty on the initial paint.
+      refreshCredentials();
     } else if (next.verifyMessage && !/^verifying/i.test(next.verifyMessage)) {
       setToast({ kind: "error", text: next.verifyMessage });
       // Mark this as seen so the mirror effect above doesn't fire a duplicate
@@ -147,6 +178,23 @@ export function App() {
     setState(next);
     if (next.status === "success") {
       setToast({ kind: "success", text: "Re-synced." });
+      // Session row for that account is now stale — pull a fresh list.
+      refreshCredentials();
+    }
+  };
+
+  const refreshCredentials = async () => {
+    setCredentialsLoading(true);
+    try {
+      const next = await requestBg<BgState>({
+        type: "LIST_CREDENTIALS",
+        force: true,
+      });
+      if (next) setState(next);
+    } catch {
+      /* error surfaces on state.credentials.error */
+    } finally {
+      setCredentialsLoading(false);
     }
   };
 
@@ -171,9 +219,11 @@ export function App() {
         {screen === "home" ? (
           <HomeScreen
             state={state}
+            credentialsLoading={credentialsLoading}
             onOpenSettings={() => setScreen("settings")}
             onVerify={verifyLogin}
             onResync={resync}
+            onRefreshCredentials={refreshCredentials}
           />
         ) : (
           <SettingsScreen

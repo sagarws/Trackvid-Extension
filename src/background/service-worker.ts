@@ -23,6 +23,8 @@
 import type {
   BgState,
   CapturedSession,
+  CredentialsList,
+  PlatformCredential,
   Settings,
   SessionStatus,
   VerifyStatus,
@@ -213,6 +215,14 @@ let lastMessage: string | null = null;
 let verifyMessage: string | null = null;
 let inflightUsername: string | null = null;
 
+// Cached credentials list from GET /api/cms/my-company-credentials. In-memory
+// only — a stale list is fine (the popup shows "updated Xs ago"), and losing
+// it on SW hibernation just means the next popup open re-fetches.
+let credentialsCache: CredentialsList | null = null;
+// Coalesce concurrent refreshes: if the popup opens while a background sync
+// is already fetching, both hit the same promise instead of racing the BE.
+let credentialsInflight: Promise<CredentialsList> | null = null;
+
 // -----------------------------------------------------------------------------
 // Storage helpers
 // -----------------------------------------------------------------------------
@@ -300,6 +310,7 @@ async function currentState(): Promise<BgState> {
     verifyMessage,
     lastCapture,
     lastMessage,
+    credentials: credentialsCache,
   };
 }
 
@@ -411,6 +422,7 @@ async function performLogout(): Promise<BgState> {
   await patchSettings({ accessToken: "", tokenSavedAt: "", password: "" });
   await saveLastCapture(null);
   await savePendingSecureSync(false);
+  invalidateCredentialsCache();
   verifyMessage = "Logged out.";
   setStatus("idle");
   return currentState();
@@ -598,6 +610,91 @@ function extractUsernameFromBody(
 // BE sync
 // -----------------------------------------------------------------------------
 
+// Company-scoped credential list. Empty result shape so callers don't have
+// to branch on null.
+const EMPTY_LIST: CredentialsList = {
+  myntra: [],
+  flipkart: [],
+  fetchedAt: 0,
+  error: null,
+};
+
+async function fetchCredentialsList(): Promise<CredentialsList> {
+  if (credentialsInflight) return credentialsInflight;
+
+  const run = (async (): Promise<CredentialsList> => {
+    const settings = await loadSettings();
+    if (!BACKEND_URL) {
+      return { ...EMPTY_LIST, fetchedAt: Date.now(), error: "Backend URL is not configured." };
+    }
+    if (!settings.accessToken) {
+      return { ...EMPTY_LIST, fetchedAt: Date.now(), error: "Not verified — click Verify first." };
+    }
+
+    const url =
+      BACKEND_URL.replace(/\/+$/, "") + "/api/cms/my-company-credentials";
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${settings.accessToken}`,
+        },
+      });
+      if (res.status === 401) {
+        // Same handling as sendToBackend — a 401 means the token is dead.
+        await patchSettings({ accessToken: "", tokenSavedAt: "" });
+        verifyMessage = "Session expired. Click Verify to log in again.";
+        broadcastState();
+        return {
+          ...EMPTY_LIST,
+          fetchedAt: Date.now(),
+          error: "Access token expired — click Verify.",
+        };
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return {
+          ...EMPTY_LIST,
+          fetchedAt: Date.now(),
+          error: `Backend ${res.status}: ${text.slice(0, 200)}`,
+        };
+      }
+      const json = (await res.json().catch(() => ({}))) as {
+        data?: {
+          myntra?: PlatformCredential[];
+          flipkart?: PlatformCredential[];
+        };
+      };
+      return {
+        myntra: json.data?.myntra ?? [],
+        flipkart: json.data?.flipkart ?? [],
+        fetchedAt: Date.now(),
+        error: null,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ...EMPTY_LIST, fetchedAt: Date.now(), error: msg };
+    }
+  })();
+
+  credentialsInflight = run;
+  try {
+    const result = await run;
+    credentialsCache = result;
+    return result;
+  } finally {
+    credentialsInflight = null;
+  }
+}
+
+// Force-invalidate the cache so the next fetch bypasses the "already
+// populated" check. Called after a successful capture/sync — the row for
+// that account is now stale (its session summary needs a refresh).
+function invalidateCredentialsCache(): void {
+  credentialsCache = null;
+}
+
 async function sendToBackend(
   capture: CapturedSession,
   settings: Settings
@@ -717,6 +814,7 @@ async function onLoginDetected(
     await sendToBackend(capture, settings);
     capture.syncedAt = new Date().toISOString();
     await saveLastCapture(capture);
+    invalidateCredentialsCache();
     setStatus("success", `${spec.label} session synced for ${capture.username}`);
     notify(
       "TrackVid — session synced",
@@ -898,6 +996,7 @@ async function syncPendingCapture(): Promise<void> {
     cap.syncedAt = new Date().toISOString();
     await saveLastCapture(cap);
     await savePendingSecureSync(false);
+    invalidateCredentialsCache();
     setStatus("success", `${spec.label} session synced for ${cap.username}`);
     notify(
       "TrackVid — session synced",
@@ -968,6 +1067,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             await sendToBackend(cap, settings);
             cap.syncedAt = new Date().toISOString();
             await saveLastCapture(cap);
+            invalidateCredentialsCache();
             setStatus("success", `Session re-synced for ${cap.username}`);
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -981,6 +1081,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           await savePendingSecureSync(false);
           setStatus("idle");
           sendResponse(await currentState());
+          return;
+        }
+        case "LIST_CREDENTIALS": {
+          // `force` skips the cache and re-hits the BE — used by the popup's
+          // manual refresh button. Otherwise cache is served if warm.
+          const force = message.force === true;
+          if (force) invalidateCredentialsCache();
+          const list =
+            credentialsCache && !force
+              ? credentialsCache
+              : await fetchCredentialsList();
+          const state = await currentState();
+          sendResponse({ ...state, credentials: list });
+          broadcastState();
           return;
         }
         case "HARVEST_NOW": {

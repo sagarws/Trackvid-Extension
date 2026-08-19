@@ -55,7 +55,44 @@ export type BgMessage =
   | { type: "VERIFY_LOGIN" }
   | { type: "LOGOUT" }
   | { type: "RESYNC_LAST" }
-  | { type: "CLEAR_LAST" };
+  | { type: "CLEAR_LAST" }
+  | { type: "LIST_CREDENTIALS"; force?: boolean };
+
+// Session summary returned by GET /api/cms/my-company-credentials. Mirrors
+// the projection in TrackVid-BE companyCredentials.controller.ts — cookie
+// VALUES and csrfToken are stripped in-DB, only names / presence bits leave.
+export interface SessionSummary {
+  savedAt: string | null;
+  expiresAt: string | null;
+  ip: string | null;
+  source: string | null;
+  cookieNames: string[];
+  // Myntra rows carry hasProxySession; Flipkart rows carry hasCsrfToken.
+  hasProxySession?: boolean;
+  hasCsrfToken?: boolean;
+}
+
+export interface PlatformCredential {
+  credentialId: string;
+  username: string;
+  accountType: string;
+  vendorCode: string;
+  isVerified: boolean;
+  visible: boolean;
+  // Only the field for this credential's own platform is populated; the
+  // other is always null.
+  myntraSession: SessionSummary | null;
+  flipkartSession: SessionSummary | null;
+}
+
+export interface CredentialsList {
+  myntra: PlatformCredential[];
+  flipkart: PlatformCredential[];
+  // ms epoch of the fetch; the popup shows "updated Xs ago" and decides
+  // whether to trigger a background refresh.
+  fetchedAt: number;
+  error: string | null;
+}
 
 export interface BgState {
   settings: Settings;
@@ -64,4 +101,5 @@ export interface BgState {
   verifyMessage: string | null;
   lastCapture: CapturedSession | null;
   lastMessage: string | null;
+  credentials: CredentialsList | null;
 }
