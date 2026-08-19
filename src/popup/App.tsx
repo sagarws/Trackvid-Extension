@@ -201,7 +201,7 @@ export function App() {
   if (booting) return <SplashScreen />;
 
   return (
-    <div className="relative flex h-[560px] w-full flex-col bg-white">
+    <div className="relative flex h-[710px] w-full flex-col bg-white">
       {toast && (
         <Toast
           kind={toast.kind}
