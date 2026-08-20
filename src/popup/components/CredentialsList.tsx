@@ -13,7 +13,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-type PlatformKey = "myntra" | "flipkart";
+type PlatformKey = "myntra" | "flipkart" | "ajio";
 type SessionStateKind = "active" | "expired" | "none";
 
 interface SessionState {
@@ -73,15 +73,16 @@ export function CredentialsList({ data, loading, onRefresh }: Props) {
   } | null>(null);
 
   const sections = useMemo(() => {
-    const src = data ?? { myntra: [], flipkart: [] };
+    const src = data ?? { myntra: [], flipkart: [], ajio: [] };
     return [
       { key: "myntra" as const, label: "Myntra", rows: src.myntra },
       { key: "flipkart" as const, label: "Flipkart", rows: src.flipkart },
+      { key: "ajio" as const, label: "AJIO", rows: src.ajio },
     ];
   }, [data]);
 
   const total =
-    (data?.myntra.length ?? 0) + (data?.flipkart.length ?? 0);
+    (data?.myntra.length ?? 0) + (data?.flipkart.length ?? 0) + (data?.ajio.length ?? 0);
   const fetchedAgo = data?.fetchedAt
     ? formatRelative(Date.now() - data.fetchedAt)
     : null;
@@ -176,7 +177,11 @@ interface RowProps {
 
 function CredentialRow({ cred, platform, onView }: RowProps) {
   const session =
-    platform === "myntra" ? cred.myntraSession : cred.flipkartSession;
+    platform === "myntra"
+      ? cred.myntraSession
+      : platform === "flipkart"
+        ? cred.flipkartSession
+        : cred.ajioSession;
   const state = readSessionState(session);
   return (
     <li className="flex items-center gap-2 border-b border-ink-300/20 px-3 py-2 last:border-b-0">
@@ -234,7 +239,11 @@ interface ModalProps {
 function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
   const [copied, setCopied] = useState(false);
   const session =
-    platform === "myntra" ? cred.myntraSession : cred.flipkartSession;
+    platform === "myntra"
+      ? cred.myntraSession
+      : platform === "flipkart"
+        ? cred.flipkartSession
+        : cred.ajioSession;
   const state = readSessionState(session);
 
   // Exact shape shown on the dashboard's detail modal (see Image #2). Nulls
@@ -250,7 +259,9 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
             source: session.source,
             ...(platform === "flipkart"
               ? { hasCsrfToken: session.hasCsrfToken ?? false }
-              : { hasProxySession: session.hasProxySession ?? false }),
+              : platform === "ajio"
+                ? { userId: session.userId ?? null, pobCount: session.pobCount ?? 0 }
+                : { hasProxySession: session.hasProxySession ?? false }),
             cookieNames: session.cookieNames,
           }
         : null,
@@ -283,7 +294,7 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
         <div className="flex items-start justify-between border-b border-white/10 px-4 py-3">
           <div className="min-w-0">
             <p className="text-[13px] font-semibold">
-              {platform === "myntra" ? "Myntra" : "Flipkart"} session
+              {platform === "myntra" ? "Myntra" : platform === "flipkart" ? "Flipkart" : "AJIO"} session
             </p>
             <p
               className="mt-0.5 flex items-center gap-2 truncate text-[11px] text-white/70"
@@ -325,7 +336,9 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
             as <code>cookieNames</code>
             {platform === "flipkart"
               ? ", and the fk-csrf-token only as `hasCsrfToken`."
-              : "."}
+              : platform === "ajio"
+                ? ". userId + pobCount are safe post-login state."
+                : "."}
           </p>
           <div className="flex justify-end gap-2">
             <button

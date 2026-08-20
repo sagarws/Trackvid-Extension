@@ -21,6 +21,7 @@
 // -----------------------------------------------------------------------------
 
 import type {
+  AjioCookieRecord,
   BgState,
   CapturedSession,
   CredentialsList,
@@ -30,7 +31,7 @@ import type {
   VerifyStatus,
 } from "@/lib/types";
 
-export type PlatformKey = "myntra" | "flipkart";
+export type PlatformKey = "myntra" | "flipkart" | "ajio";
 
 interface PlatformSpec {
   key: PlatformKey;
@@ -108,6 +109,37 @@ const PLATFORMS: Record<PlatformKey, PlatformSpec> = {
     csrfCookie: "XyZ7pQ9rS2T1uV8wA3bC6dE4fG0h",
     ingestPath: "/api/flipkart/ingest-session",
   },
+  ajio: {
+    key: "ajio",
+    label: "AJIO",
+    // AJIO login is Reliance Retail OAuth SSO: the seller lands on
+    // seller.ajio.com, gets redirected to sellers.relianceretail.com to enter
+    // credentials, then OAuth-callbacks to seller.ajio.com/malekith/auth/ns_vms/callback.
+    // Both the SSO submit and the callback are watched; either one arriving
+    // 2xx means the session has landed and cookies are worth harvesting.
+    loginUrlPatterns: [
+      "https://sellers.relianceretail.com/auth/oauth/authorize*",
+      "https://seller.ajio.com/malekith/auth/ns_vms/callback*",
+    ],
+    allUrlPatterns: [
+      "https://seller.ajio.com/*",
+      "https://sellers.relianceretail.com/*",
+    ],
+    cookieDomains: [
+      "ajio.com",
+      ".ajio.com",
+      "seller.ajio.com",
+      "relianceretail.com",
+      ".relianceretail.com",
+    ],
+    // AJIO's session lives in a set of cookies Akamai plants (`_abck`, `bm_sv`)
+    // plus the app's own session cookie. Their names are not fixed across
+    // releases, so we accept "any non-empty jar" and let the liveness probe on
+    // the automation side judge. The MIN_COOKIES check in the BE ingest
+    // controller (>= 3) keeps a torn-down session from being persisted.
+    requiredCookies: [] as const,
+    ingestPath: "/api/ajio/ingest-session",
+  },
 };
 
 const PLATFORM_LIST = Object.values(PLATFORMS);
@@ -116,6 +148,10 @@ const PLATFORM_LIST = Object.values(PLATFORMS);
 function platformForUrl(url: string): PlatformSpec | null {
   if (/^https:\/\/([a-z0-9-]+\.)*myntra(info)?\.com\//i.test(url)) return PLATFORMS.myntra;
   if (/^https:\/\/seller\.flipkart\.com\//i.test(url)) return PLATFORMS.flipkart;
+  if (/^https:\/\/seller\.ajio\.com\//i.test(url)) return PLATFORMS.ajio;
+  // AJIO login goes through Reliance Retail SSO — the /login POST lands on
+  // sellers.relianceretail.com, so map that host to AJIO too.
+  if (/^https:\/\/sellers\.relianceretail\.com\//i.test(url)) return PLATFORMS.ajio;
   return null;
 }
 
@@ -143,15 +179,27 @@ const truncVal = (v: string) =>
 // -----------------------------------------------------------------------------
 
 // One jar per platform — a Myntra cookie must never leak into a Flipkart
-// capture, and both portals can be open in the same browser at once.
+// capture, and every portal can be open in the same browser at once.
 const headerJars: Record<PlatformKey, Record<string, string>> = {
   myntra: {},
   flipkart: {},
+  ajio: {},
 };
 
 // Flipkart's fk-csrf-token, sniffed from request headers. Not a cookie, so it
 // lives beside the jar rather than in it.
 const csrfTokens: Partial<Record<PlatformKey, string>> = {};
+
+// AJIO page-context state — posted here by src/content-scripts/ajio-page.ts
+// after the seller.ajio.com SPA has hydrated localStorage. See
+// onLoginDetected's AJIO branch for how this is consumed.
+interface AjioPageState {
+  userId: string;
+  pobIds: string[];
+  stores: { id: string; storeName?: string }[];
+  capturedAt: string;
+}
+let ajioPageState: AjioPageState | null = null;
 
 function ingestSetCookieHeader(headerJar: Record<string, string>, raw: string, sourceUrl: string) {
   // Chrome may combine multiple Set-Cookie into one string separated by \n
@@ -508,6 +556,86 @@ async function harvestCookies(spec: PlatformSpec): Promise<Record<string, string
   return jar;
 }
 
+// AJIO-only cookie harvester — returns FULL cookie records (name+value+
+// domain+path+secure+httpOnly+sameSite+expires) rather than the flat map the
+// other platforms use. The Puppeteer runner needs the full shape to rehydrate
+// HttpOnly Akamai cookies via CDP `Network.setCookies`; anything less and the
+// jar is unusable.
+async function harvestAjioCookieRecords(spec: PlatformSpec): Promise<AjioCookieRecord[]> {
+  const byKey = new Map<string, AjioCookieRecord>();
+
+  for (const domain of spec.cookieDomains) {
+    let cookies: chrome.cookies.Cookie[] = [];
+    try {
+      cookies = await chrome.cookies.getAll({ domain });
+    } catch (err) {
+      dlog(`[ajio] getAll(domain=${domain}) threw`, err);
+      continue;
+    }
+    for (const c of cookies) {
+      // Key by name+domain+path so a name that exists at two scopes is not
+      // collapsed. If a duplicate key appears, prefer the more-specific domain.
+      const key = `${c.name}|${c.domain}|${c.path}`;
+      const prior = byKey.get(key);
+      if (prior && prior.domain.length >= c.domain.length) continue;
+      byKey.set(key, {
+        name: c.name,
+        value: c.value,
+        domain: c.domain,
+        path: c.path,
+        secure: !!c.secure,
+        httpOnly: !!c.httpOnly,
+        sameSite: (c.sameSite || undefined) as string | undefined,
+        expires:
+          typeof c.expirationDate === "number" ? Math.floor(c.expirationDate) : undefined,
+      });
+    }
+  }
+
+  const records = Array.from(byKey.values());
+  dlog(`[ajio] harvested ${records.length} full cookie records`);
+  return records;
+}
+
+// AJIO page-state accessor. Returns the last message from the content script
+// if we have one, otherwise asks the active seller.ajio.com tab to resend.
+async function ensureAjioPageState(timeoutMs = 6000): Promise<AjioPageState | null> {
+  if (ajioPageState) return ajioPageState;
+
+  // Ask any open seller.ajio.com tab for its current state.
+  let tabs: chrome.tabs.Tab[] = [];
+  try {
+    tabs = await chrome.tabs.query({ url: "https://seller.ajio.com/*" });
+  } catch {
+    tabs = [];
+  }
+  for (const t of tabs) {
+    if (!t.id) continue;
+    try {
+      const resp = await new Promise<{ userId?: string; pobIds?: string[]; stores?: { id: string; storeName?: string }[] } | undefined>((resolve) => {
+        const timer = setTimeout(() => resolve(undefined), timeoutMs);
+        chrome.tabs.sendMessage(t.id!, { type: "AJIO_QUERY_PAGE_STATE" }, (r) => {
+          clearTimeout(timer);
+          if (chrome.runtime.lastError) resolve(undefined);
+          else resolve(r);
+        });
+      });
+      if (resp?.userId && Array.isArray(resp.pobIds) && resp.pobIds.length > 0) {
+        ajioPageState = {
+          userId: resp.userId,
+          pobIds: resp.pobIds,
+          stores: resp.stores || [],
+          capturedAt: new Date().toISOString(),
+        };
+        return ajioPageState;
+      }
+    } catch {
+      /* tab may have navigated — try the next one */
+    }
+  }
+  return null;
+}
+
 // Retry harvesting: cookies set by a login redirect chain don't always land in
 // Chrome's cookie store the instant the POST completes. Retry with backoff and
 // stop as soon as the required cookies appear.
@@ -615,6 +743,7 @@ function extractUsernameFromBody(
 const EMPTY_LIST: CredentialsList = {
   myntra: [],
   flipkart: [],
+  ajio: [],
   fetchedAt: 0,
   error: null,
 };
@@ -664,11 +793,13 @@ async function fetchCredentialsList(): Promise<CredentialsList> {
         data?: {
           myntra?: PlatformCredential[];
           flipkart?: PlatformCredential[];
+          ajio?: PlatformCredential[];
         };
       };
       return {
         myntra: json.data?.myntra ?? [],
         flipkart: json.data?.flipkart ?? [],
+        ajio: json.data?.ajio ?? [],
         fetchedAt: Date.now(),
         error: null,
       };
@@ -704,20 +835,38 @@ async function sendToBackend(
   const spec = PLATFORMS[capture.platform ?? "myntra"];
   const url = BACKEND_URL.replace(/\/+$/, "") + spec.ingestPath;
 
+  // AJIO's ingest endpoint takes a DIFFERENT payload shape: `jar` is an array
+  // of full cookie records (name+value+domain+path+…) so the automation can
+  // rehydrate HttpOnly Akamai cookies into Puppeteer via CDP, plus userId and
+  // pobIds captured by the AJIO content script. Myntra/Flipkart use the flat
+  // {name:value} map because their runners rebuild a Cookie header manually.
+  const body =
+    capture.platform === "ajio"
+      ? {
+          username: capture.username,
+          jar: capture.ajioCookies || [],
+          userId: capture.ajioUserId,
+          pobIds: capture.ajioPobIds,
+          stores: capture.ajioStores,
+          source: "chrome-extension",
+          capturedAt: capture.capturedAt,
+        }
+      : {
+          username: capture.username,
+          jar: capture.cookies,
+          // Only Flipkart's endpoint expects this; Myntra's ignores the extra key.
+          ...(capture.csrfToken ? { csrfToken: capture.csrfToken } : {}),
+          source: "chrome-extension",
+          capturedAt: capture.capturedAt,
+        };
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${settings.accessToken}`,
     },
-    body: JSON.stringify({
-      username: capture.username,
-      jar: capture.cookies,
-      // Only Flipkart's endpoint expects this; Myntra's ignores the extra key.
-      ...(capture.csrfToken ? { csrfToken: capture.csrfToken } : {}),
-      source: "chrome-extension",
-      capturedAt: capture.capturedAt,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (res.status === 401) {
@@ -787,6 +936,28 @@ async function onLoginDetected(
     ...(spec.csrfHeader ? { csrfToken: csrfToken(spec, jar) } : {}),
     capturedAt: new Date().toISOString(),
   };
+
+  // AJIO needs three things Myntra/Flipkart don't: full cookie records (to
+  // rehydrate HttpOnly Akamai cookies via CDP), the seller's userId (from
+  // localStorage), and the seller's PoB ids (from the work-places API). The
+  // last two come from the content script — either as an unsolicited push
+  // (ajioPageState) or via a live query if the SPA finished hydrating
+  // before we started listening.
+  if (spec.key === "ajio") {
+    capture.ajioCookies = await harvestAjioCookieRecords(spec);
+    const pageState = await ensureAjioPageState();
+    if (!pageState) {
+      setStatus(
+        "error",
+        "AJIO cookies captured but userId + pobIds not yet available. Reload the seller portal and retry."
+      );
+      return;
+    }
+    capture.ajioUserId = pageState.userId;
+    capture.ajioPobIds = pageState.pobIds;
+    capture.ajioStores = pageState.stores;
+  }
+
   await saveLastCapture(capture);
 
   if (!settings.autoSync) {
@@ -1028,6 +1199,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   (async () => {
     try {
       switch (message?.type) {
+        case "AJIO_PAGE_STATE": {
+          // Unsolicited push from src/content-scripts/ajio-page.ts once the
+          // SPA has activeSellerProfileId + a work-places response. Stored so
+          // onLoginDetected can attach it to the AJIO capture without a
+          // second content-script round-trip.
+          const { userId, pobIds, stores, capturedAt } = message as {
+            userId?: string;
+            pobIds?: string[];
+            stores?: { id: string; storeName?: string }[];
+            capturedAt?: string;
+          };
+          if (userId && Array.isArray(pobIds) && pobIds.length > 0) {
+            ajioPageState = {
+              userId,
+              pobIds,
+              stores: stores || [],
+              capturedAt: capturedAt || new Date().toISOString(),
+            };
+            dlog(
+              `[ajio] page state received — userId=${userId.slice(0, 8)}… pobs=${pobIds.length}`
+            );
+          }
+          sendResponse({ ok: true });
+          return;
+        }
         case "GET_STATE": {
           sendResponse(await currentState());
           return;
