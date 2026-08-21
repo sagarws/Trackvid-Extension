@@ -14,6 +14,7 @@ import type { BgState } from "@/lib/types";
 interface HomeScreenProps {
   state: BgState;
   credentialsLoading: boolean;
+  devMode: boolean;
   onOpenSettings: () => void;
   onVerify: () => void;
   onResync: () => void;
@@ -23,6 +24,7 @@ interface HomeScreenProps {
 export function HomeScreen({
   state,
   credentialsLoading,
+  devMode,
   onOpenSettings,
   onVerify,
   onResync,
@@ -112,7 +114,7 @@ export function HomeScreen({
           {description}
         </p>
 
-        {configured && (
+        {configured && devMode && (
           <div className="mt-3 flex min-h-0 flex-1 flex-col">
             <CredentialsList
               data={credentials}
@@ -122,7 +124,7 @@ export function HomeScreen({
           </div>
         )}
 
-        <div className={cn("pb-4 pt-3", !configured && "mt-auto")}>
+        <div className={cn("pb-4 pt-3", (!configured || !devMode) && "mt-auto")}>
           <div className="grid grid-cols-2 gap-2">
             {/* Left: verify status / verify button */}
             <button

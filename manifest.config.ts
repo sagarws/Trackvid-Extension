@@ -3,7 +3,7 @@ import pkg from "./package.json";
 
 export default defineManifest({
   manifest_version: 3,
-  name: "TrackVid — Seller Session Capture",
+  name: "TrackVid",
   description:
     "Captures Myntra, Flipkart, and AJIO seller-portal sessions after login and syncs them to TrackVid.",
   version: pkg.version,

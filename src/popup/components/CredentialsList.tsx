@@ -183,6 +183,11 @@ function CredentialRow({ cred, platform, onView }: RowProps) {
         ? cred.flipkartSession
         : cred.ajioSession;
   const state = readSessionState(session);
+  const savedAtMs = session?.savedAt ? new Date(session.savedAt).getTime() : null;
+  const savedAgo =
+    savedAtMs != null && !Number.isNaN(savedAtMs)
+      ? formatRelative(Date.now() - savedAtMs)
+      : null;
   return (
     <li className="flex items-center gap-2 border-b border-ink-300/20 px-3 py-2 last:border-b-0">
       <div className="min-w-0 flex-1">
@@ -203,6 +208,14 @@ function CredentialRow({ cred, platform, onView }: RowProps) {
           >
             {cred.isVerified ? "Verified" : "Unverified"}
           </span>
+          {savedAgo && (
+            <span
+              className="text-[9px] text-ink-400"
+              title={session?.savedAt ?? undefined}
+            >
+              saved {savedAgo}
+            </span>
+          )}
           {state.kind === "active" && state.expiresInMs != null && (
             <span className="text-[9px] text-ink-400">
               expires in {formatDuration(state.expiresInMs)}
@@ -369,5 +382,7 @@ function formatRelative(ms: number): string {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
-  return `${h}h ago`;
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }

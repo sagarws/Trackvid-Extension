@@ -46,6 +46,11 @@ type ToastState = { kind: "error" | "success"; text: string } | null;
 
 const TOAST_TTL_MS = 5000;
 
+// devMode gates internal-only UI (impersonation toggle, accounts list).
+// Set VITE_DEV_MODE=true in .env to enable at build time.
+const DEV_MODE =
+  String(import.meta.env.VITE_DEV_MODE ?? "").toLowerCase() === "true";
+
 export function App() {
   const [booting, setBooting] = useState(true);
   const [screen, setScreen] = useState<Screen>("home");
@@ -100,6 +105,7 @@ export function App() {
       if (msg?.type === "STATE_UPDATE" && msg.state) setState(msg.state);
     };
     chrome.runtime?.onMessage?.addListener(listener);
+
     return () => {
       mounted = false;
       chrome.runtime?.onMessage?.removeListener(listener);
@@ -220,6 +226,7 @@ export function App() {
           <HomeScreen
             state={state}
             credentialsLoading={credentialsLoading}
+            devMode={DEV_MODE}
             onOpenSettings={() => setScreen("settings")}
             onVerify={verifyLogin}
             onResync={resync}
@@ -230,6 +237,7 @@ export function App() {
             initial={state.settings}
             verify={state.verify}
             verifyMessage={state.verifyMessage}
+            devMode={DEV_MODE}
             onSave={saveSettings}
             onVerify={verifyLogin}
             onLogout={logout}

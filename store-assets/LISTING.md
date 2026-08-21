@@ -10,9 +10,9 @@ Assets live beside this file.
 ### Title
 Comes from `manifest.config.ts` → `name`. Currently:
 
-    TrackVid — Seller Session Capture
+    TrackVid
 
-Limit is 75 chars (currently 33). To change it, edit `name` in `manifest.config.ts`
+Limit is 75 chars. To change it, edit `name` in `manifest.config.ts`
 and re-upload the ZIP — it is not editable in the dashboard.
 
 ### Summary

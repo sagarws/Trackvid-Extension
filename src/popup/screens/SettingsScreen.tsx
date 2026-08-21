@@ -7,6 +7,7 @@ interface Props {
   initial: Settings;
   verify: VerifyStatus;
   verifyMessage: string | null;
+  devMode: boolean;
   onSave: (s: Settings) => Promise<void> | void;
   onVerify: () => Promise<void> | void;
   onLogout: () => Promise<void> | void;
@@ -20,12 +21,17 @@ export function SettingsScreen({
   initial,
   verify,
   verifyMessage,
+  devMode,
   onSave,
   onVerify,
   onLogout,
   onBack,
 }: Props) {
-  const [form, setForm] = useState<Settings>(initial);
+  // Force email+password mode when devMode is off — the userId path is an
+  // internal impersonation shortcut and its toggle is hidden below.
+  const [form, setForm] = useState<Settings>(
+    devMode ? initial : { ...initial, useUserId: false }
+  );
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -103,22 +109,24 @@ export function SettingsScreen({
           <h2 className="text-[15px] font-bold text-ink-900">Configuration</h2>
         </div>
 
-        {/* Toggle: "Have User ID" — impersonation shortcut */}
-        <label className="flex cursor-pointer items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-            Have User ID
-          </span>
-          <span className="relative inline-flex h-5 w-9 items-center">
-            <input
-              type="checkbox"
-              className="peer sr-only"
-              checked={form.useUserId}
-              onChange={(e) => set("useUserId", e.target.checked)}
-            />
-            <span className="absolute inset-0 rounded-full bg-ink-300/60 transition peer-checked:bg-brand-500" />
-            <span className="absolute left-0.5 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-4" />
-          </span>
-        </label>
+        {/* Toggle: "Have User ID" — impersonation shortcut, devMode only */}
+        {devMode && (
+          <label className="flex cursor-pointer items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-500">
+              Have User ID
+            </span>
+            <span className="relative inline-flex h-5 w-9 items-center">
+              <input
+                type="checkbox"
+                className="peer sr-only"
+                checked={form.useUserId}
+                onChange={(e) => set("useUserId", e.target.checked)}
+              />
+              <span className="absolute inset-0 rounded-full bg-ink-300/60 transition peer-checked:bg-brand-500" />
+              <span className="absolute left-0.5 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-4" />
+            </span>
+          </label>
+        )}
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto px-5 py-2">
