@@ -13,7 +13,7 @@ interface Props {
   onRefresh: () => void;
 }
 
-type PlatformKey = "myntra" | "flipkart" | "ajio";
+type PlatformKey = "myntra" | "flipkart" | "ajio" | "snapdeal" | "delhivery" | "xbees" | "meesho" | "nykaa";
 type SessionStateKind = "active" | "expired" | "none";
 
 interface SessionState {
@@ -73,16 +73,31 @@ export function CredentialsList({ data, loading, onRefresh }: Props) {
   } | null>(null);
 
   const sections = useMemo(() => {
-    const src = data ?? { myntra: [], flipkart: [], ajio: [] };
+    const src = data ?? {
+      myntra: [], flipkart: [], ajio: [], snapdeal: [],
+      delhivery: [], xbees: [], meesho: [], nykaa: [],
+    };
     return [
       { key: "myntra" as const, label: "Myntra", rows: src.myntra },
       { key: "flipkart" as const, label: "Flipkart", rows: src.flipkart },
       { key: "ajio" as const, label: "AJIO", rows: src.ajio },
+      { key: "snapdeal" as const, label: "Snapdeal", rows: src.snapdeal },
+      { key: "delhivery" as const, label: "Delhivery", rows: src.delhivery },
+      { key: "xbees" as const, label: "Xbees", rows: src.xbees },
+      { key: "meesho" as const, label: "Meesho", rows: src.meesho },
+      { key: "nykaa" as const, label: "Nykaa", rows: src.nykaa },
     ];
   }, [data]);
 
   const total =
-    (data?.myntra.length ?? 0) + (data?.flipkart.length ?? 0) + (data?.ajio.length ?? 0);
+    (data?.myntra.length ?? 0) +
+    (data?.flipkart.length ?? 0) +
+    (data?.ajio.length ?? 0) +
+    (data?.snapdeal.length ?? 0) +
+    (data?.delhivery.length ?? 0) +
+    (data?.xbees.length ?? 0) +
+    (data?.meesho.length ?? 0) +
+    (data?.nykaa.length ?? 0);
   const fetchedAgo = data?.fetchedAt
     ? formatRelative(Date.now() - data.fetchedAt)
     : null;
@@ -181,7 +196,17 @@ function CredentialRow({ cred, platform, onView }: RowProps) {
       ? cred.myntraSession
       : platform === "flipkart"
         ? cred.flipkartSession
-        : cred.ajioSession;
+        : platform === "ajio"
+          ? cred.ajioSession
+          : platform === "snapdeal"
+            ? cred.snapdealSession
+            : platform === "delhivery"
+              ? cred.delhiverySession
+              : platform === "xbees"
+                ? cred.xbeesSession
+                : platform === "meesho"
+                  ? cred.meeshoSession
+                  : cred.nykaaSession;
   const state = readSessionState(session);
   const savedAtMs = session?.savedAt ? new Date(session.savedAt).getTime() : null;
   const savedAgo =
@@ -256,7 +281,17 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
       ? cred.myntraSession
       : platform === "flipkart"
         ? cred.flipkartSession
-        : cred.ajioSession;
+        : platform === "ajio"
+          ? cred.ajioSession
+          : platform === "snapdeal"
+            ? cred.snapdealSession
+            : platform === "delhivery"
+              ? cred.delhiverySession
+              : platform === "xbees"
+                ? cred.xbeesSession
+                : platform === "meesho"
+                  ? cred.meeshoSession
+                  : cred.nykaaSession;
   const state = readSessionState(session);
 
   // Exact shape shown on the dashboard's detail modal (see Image #2). Nulls
@@ -274,7 +309,11 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
               ? { hasCsrfToken: session.hasCsrfToken ?? false }
               : platform === "ajio"
                 ? { userId: session.userId ?? null, pobCount: session.pobCount ?? 0 }
-                : { hasProxySession: session.hasProxySession ?? false }),
+                : platform === "snapdeal" || platform === "meesho" || platform === "nykaa"
+                  ? {} // Cookie-only jars — no extra secret alongside the cookies
+                  : platform === "delhivery" || platform === "xbees"
+                    ? {} // JWT platforms — the session summary itself flags refresh/access presence
+                    : { hasProxySession: session.hasProxySession ?? false }),
             cookieNames: session.cookieNames,
           }
         : null,
@@ -307,7 +346,21 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
         <div className="flex items-start justify-between border-b border-white/10 px-4 py-3">
           <div className="min-w-0">
             <p className="text-[13px] font-semibold">
-              {platform === "myntra" ? "Myntra" : platform === "flipkart" ? "Flipkart" : "AJIO"} session
+              {platform === "myntra"
+                ? "Myntra"
+                : platform === "flipkart"
+                  ? "Flipkart"
+                  : platform === "ajio"
+                    ? "AJIO"
+                    : platform === "snapdeal"
+                      ? "Snapdeal"
+                      : platform === "delhivery"
+                        ? "Delhivery"
+                        : platform === "xbees"
+                          ? "Xbees"
+                          : platform === "meesho"
+                            ? "Meesho"
+                            : "Nykaa"} session
             </p>
             <p
               className="mt-0.5 flex items-center gap-2 truncate text-[11px] text-white/70"
@@ -351,7 +404,9 @@ function SessionDetailModal({ platform, cred, onClose }: ModalProps) {
               ? ", and the fk-csrf-token only as `hasCsrfToken`."
               : platform === "ajio"
                 ? ". userId + pobCount are safe post-login state."
-                : "."}
+                : platform === "delhivery" || platform === "xbees"
+                  ? ". JWT tokens are stored in DB; only presence flags leave here."
+                  : "."}
           </p>
           <div className="flex justify-end gap-2">
             <button

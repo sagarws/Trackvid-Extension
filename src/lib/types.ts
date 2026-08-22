@@ -15,7 +15,20 @@ export type VerifyStatus =
 
 // Which seller portal a capture came from. Older stored captures predate the
 // field, so readers treat a missing value as Myntra.
-export type CapturedPlatform = "myntra" | "flipkart" | "ajio";
+//
+// Delhivery + Xbees use JWT bearer tokens instead of cookies — the extension
+// captures the token bundle from the response body of the Keycloak /token
+// endpoint and posts it as { username, accessToken, refreshToken, expiresIn,
+// realm, ... } to the BE, NOT as a cookie jar.
+export type CapturedPlatform =
+  | "myntra"
+  | "flipkart"
+  | "ajio"
+  | "snapdeal"
+  | "delhivery"
+  | "xbees"
+  | "meesho"
+  | "nykaa";
 
 // Full cookie record — needed for AJIO because Akamai's HttpOnly cookies
 // cannot be rehydrated into Puppeteer via CDP without the domain/path/secure/
@@ -36,8 +49,11 @@ export interface CapturedSession {
   platform?: CapturedPlatform;
   username: string;
   userEmail: string;
-  // Myntra/Flipkart: flat {name: value}. AJIO: full cookie records; the
+  // Myntra/Flipkart/Snapdeal: flat {name: value}. AJIO: full cookie records; the
   // AJIO branch of sendToBackend keeps this shape when it POSTs.
+  // Delhivery/Xbees: cookies is empty; the session is expressed as JWT tokens
+  // below (accessToken/refreshToken/etc.) — cookie-jar platforms and JWT
+  // platforms both flow through this interface for uniformity.
   cookies: {
     "erp.at"?: string;
     session?: string;
@@ -54,6 +70,15 @@ export interface CapturedSession {
   ajioUserId?: string;
   ajioPobIds?: string[];
   ajioStores?: { id: string; storeName?: string }[];
+  // Delhivery/Xbees only: OAuth2 tokens captured from the Keycloak /token
+  // response body. The BE stores `refreshToken` and mints a fresh
+  // `accessToken` each batch (see per-platform sessionStore.js).
+  accessToken?: string;
+  refreshToken?: string;
+  expiresIn?: number;             // seconds, from token endpoint `expires_in`
+  idToken?: string | null;
+  tokenType?: string;             // "Bearer"
+  realm?: string;                 // Keycloak realm slug
   capturedAt: string;
   syncedAt?: string;
   error?: string;
@@ -112,12 +137,22 @@ export interface PlatformCredential {
   myntraSession: SessionSummary | null;
   flipkartSession: SessionSummary | null;
   ajioSession: SessionSummary | null;
+  snapdealSession: SessionSummary | null;
+  delhiverySession: SessionSummary | null;
+  xbeesSession: SessionSummary | null;
+  meeshoSession: SessionSummary | null;
+  nykaaSession: SessionSummary | null;
 }
 
 export interface CredentialsList {
   myntra: PlatformCredential[];
   flipkart: PlatformCredential[];
   ajio: PlatformCredential[];
+  snapdeal: PlatformCredential[];
+  delhivery: PlatformCredential[];
+  xbees: PlatformCredential[];
+  meesho: PlatformCredential[];
+  nykaa: PlatformCredential[];
   // ms epoch of the fetch; the popup shows "updated Xs ago" and decides
   // whether to trigger a background refresh.
   fetchedAt: number;

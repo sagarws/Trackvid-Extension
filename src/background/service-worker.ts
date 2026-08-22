@@ -31,7 +31,15 @@ import type {
   VerifyStatus,
 } from "@/lib/types";
 
-export type PlatformKey = "myntra" | "flipkart" | "ajio";
+export type PlatformKey =
+  | "myntra"
+  | "flipkart"
+  | "ajio"
+  | "snapdeal"
+  | "delhivery"
+  | "xbees"
+  | "meesho"
+  | "nykaa";
 
 interface PlatformSpec {
   key: PlatformKey;
@@ -57,6 +65,12 @@ interface PlatformSpec {
   // cookie and answers 403 EBADCSRFTOKEN when they differ — so a capture whose
   // jar lacks this cookie is dead on arrival however fresh it looks.
   csrfCookie?: string;
+  // Delhivery / Xbees: OAuth2 Keycloak token endpoint. When set, the extension
+  // treats this platform as JWT-based — the SPA POSTs an authorization_code
+  // to this URL and the response body carries { access_token, refresh_token,
+  // expires_in, ... }. The extension reads that response and forwards the
+  // token bundle to `ingestPath`. No cookie harvest at all for these.
+  tokenUrlPattern?: string;
   ingestPath: string;
 }
 
@@ -109,6 +123,104 @@ const PLATFORMS: Record<PlatformKey, PlatformSpec> = {
     csrfCookie: "XyZ7pQ9rS2T1uV8wA3bC6dE4fG0h",
     ingestPath: "/api/flipkart/ingest-session",
   },
+  meesho: {
+    key: "meesho",
+    label: "Meesho",
+    // Meesho's login POST doesn't return distinguishing content in the
+    // capture — but the session cookies are set the moment the SPA lands on
+    // /panel/v3/new. Watch /login (both the POST and the subsequent redirect
+    // GET) and harvest the resulting jar.
+    loginUrlPatterns: [
+      "https://supplier.meesho.com/panel/v3/new/root/login*",
+      "https://supplier.meesho.com/api/growth/home/password-exists*",
+    ],
+    allUrlPatterns: ["https://supplier.meesho.com/*"],
+    cookieDomains: ["meesho.com", ".meesho.com", "supplier.meesho.com"],
+    // Meesho's session cookie names are not fixed; require any non-empty jar
+    // and let the automation's /supplier/config probe judge.
+    requiredCookies: [] as const,
+    ingestPath: "/api/meesho/ingest-session",
+  },
+  nykaa: {
+    key: "nykaa",
+    label: "Nykaa",
+    // Zoho IAM login inside #iamFrame — the credential POST lands on the
+    // /signin/v2/primary/*/password endpoint (encrypted body). We can't
+    // capture the encrypted password, but a successful sign-in sets a Zoho
+    // session cookie on desk.zoho.in / dispute.nykaa.com — harvest that.
+    loginUrlPatterns: [
+      "https://dispute.nykaa.com/accounts/p/*/signin/v2/primary/*/password*",
+    ],
+    allUrlPatterns: [
+      "https://dispute.nykaa.com/*",
+      "https://desk.zoho.in/*",
+      "https://accounts.zoho.in/*",
+    ],
+    cookieDomains: [
+      "nykaa.com", ".nykaa.com", "dispute.nykaa.com",
+      "zoho.in", ".zoho.in", "desk.zoho.in", "accounts.zoho.in",
+    ],
+    requiredCookies: [] as const,
+    ingestPath: "/api/nykaa/ingest-session",
+  },
+  delhivery: {
+    key: "delhivery",
+    label: "Delhivery",
+    // Delhivery is JWT-based (Keycloak). The extension CANNOT read the
+    // access_token from the /token response body via webRequest (Chrome MV3
+    // doesn't expose response bodies). Session capture for Delhivery flows
+    // through Automated-scripts' /delhivery/renew-session (Puppeteer login).
+    // The entries below are only enough to keep the credentials-list DTO
+    // consistent — no login URLs, no cookie domains, no capture triggers.
+    loginUrlPatterns: [],
+    allUrlPatterns: [],
+    cookieDomains: [],
+    requiredCookies: [] as const,
+    tokenUrlPattern: "https://ucp-auth.delhivery.com/*/protocol/openid-connect/token*",
+    ingestPath: "/api/delhivery/ingest-session",
+  },
+  xbees: {
+    key: "xbees",
+    label: "Xbees",
+    // Same JWT story as Delhivery — session capture is /xbees/renew-session
+    // in Automated-scripts, not extension-side.
+    loginUrlPatterns: [],
+    allUrlPatterns: [],
+    cookieDomains: [],
+    requiredCookies: [] as const,
+    tokenUrlPattern: "https://auth.xbees.in/realms/*/protocol/openid-connect/token*",
+    ingestPath: "/api/xbees/ingest-session",
+  },
+  snapdeal: {
+    key: "snapdeal",
+    label: "Snapdeal",
+    // Snapdeal's seller-portal login is a two-step form: the operator submits
+    // the username on seller.snapdeal.com, then the password. The password
+    // POST lands on sellersweb.snapdeal.com/service/sellerOnboarding/login
+    // (verified from api-network-records (4).json). We watch BOTH paths so a
+    // capture is triggered whether or not the OTP challenge appears in
+    // between.
+    loginUrlPatterns: [
+      "https://sellersweb.snapdeal.com/service/sellerOnboarding/login*",
+      "https://seller.snapdeal.com/login*",
+    ],
+    allUrlPatterns: [
+      "https://seller.snapdeal.com/*",
+      "https://sellersweb.snapdeal.com/*",
+    ],
+    cookieDomains: [
+      "snapdeal.com",
+      ".snapdeal.com",
+      "seller.snapdeal.com",
+      "sellersweb.snapdeal.com",
+    ],
+    // Snapdeal's session cookie names aren't fixed and the capture stripped
+    // Cookie / Set-Cookie headers (Chrome's silent webRequest omits them). So
+    // require "any non-empty jar" and let the liveness probe on the
+    // automation side (/getLoggedInSeller) judge whether it works.
+    requiredCookies: [] as const,
+    ingestPath: "/api/snapdeal/ingest-session",
+  },
   ajio: {
     key: "ajio",
     label: "AJIO",
@@ -148,6 +260,14 @@ const PLATFORM_LIST = Object.values(PLATFORMS);
 function platformForUrl(url: string): PlatformSpec | null {
   if (/^https:\/\/([a-z0-9-]+\.)*myntra(info)?\.com\//i.test(url)) return PLATFORMS.myntra;
   if (/^https:\/\/seller\.flipkart\.com\//i.test(url)) return PLATFORMS.flipkart;
+  // Snapdeal seller portal + the sellersweb subdomain that receives the
+  // login POST. Match both so the login-URL listener sees the credential
+  // submit and the header-jar listener sees the follow-up session cookies.
+  if (/^https:\/\/(seller|sellersweb)\.snapdeal\.com\//i.test(url)) return PLATFORMS.snapdeal;
+  if (/^https:\/\/supplier\.meesho\.com\//i.test(url)) return PLATFORMS.meesho;
+  // Nykaa dispute portal + Zoho IAM host that the login POST lands on.
+  if (/^https:\/\/(dispute|www)\.nykaa\.com\//i.test(url)) return PLATFORMS.nykaa;
+  if (/^https:\/\/(desk|accounts)\.zoho\.in\//i.test(url)) return PLATFORMS.nykaa;
   if (/^https:\/\/seller\.ajio\.com\//i.test(url)) return PLATFORMS.ajio;
   // AJIO login goes through Reliance Retail SSO — the /login POST lands on
   // sellers.relianceretail.com, so map that host to AJIO too.
@@ -184,6 +304,13 @@ const headerJars: Record<PlatformKey, Record<string, string>> = {
   myntra: {},
   flipkart: {},
   ajio: {},
+  snapdeal: {},
+  // JWT platforms — kept for type completeness but never populated (their
+  // session capture flows through /renew-session in Automated-scripts).
+  delhivery: {},
+  xbees: {},
+  meesho: {},
+  nykaa: {},
 };
 
 // Flipkart's fk-csrf-token, sniffed from request headers. Not a cookie, so it
@@ -744,6 +871,11 @@ const EMPTY_LIST: CredentialsList = {
   myntra: [],
   flipkart: [],
   ajio: [],
+  snapdeal: [],
+  delhivery: [],
+  xbees: [],
+  meesho: [],
+  nykaa: [],
   fetchedAt: 0,
   error: null,
 };
@@ -794,12 +926,22 @@ async function fetchCredentialsList(): Promise<CredentialsList> {
           myntra?: PlatformCredential[];
           flipkart?: PlatformCredential[];
           ajio?: PlatformCredential[];
+          snapdeal?: PlatformCredential[];
+          delhivery?: PlatformCredential[];
+          xbees?: PlatformCredential[];
+          meesho?: PlatformCredential[];
+          nykaa?: PlatformCredential[];
         };
       };
       return {
         myntra: json.data?.myntra ?? [],
         flipkart: json.data?.flipkart ?? [],
         ajio: json.data?.ajio ?? [],
+        snapdeal: json.data?.snapdeal ?? [],
+        delhivery: json.data?.delhivery ?? [],
+        xbees: json.data?.xbees ?? [],
+        meesho: json.data?.meesho ?? [],
+        nykaa: json.data?.nykaa ?? [],
         fetchedAt: Date.now(),
         error: null,
       };

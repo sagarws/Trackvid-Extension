@@ -1,165 +1,156 @@
-# Chrome Web Store — Store listing copy
+# Chrome Web Store submission — TrackVid
 
-Paste-ready values for every field on the **Store listing** tab.
-Assets live beside this file.
+Everything needed for the **Store listing** tab, plus the two other tabs that
+gate publishing. Assets are in this folder.
 
 ---
 
-## Product details
+# 1. Product details
 
-### Title
-Comes from `manifest.config.ts` → `name`. Currently:
+## Title (read-only — from package)
+`TrackVid` — comes from `manifest.config.ts` → `name`. To change it, edit the
+manifest and re-upload the ZIP.
 
-    TrackVid
+## Summary (read-only — from package)
+`Captures Myntra, Flipkart, and AJIO seller-portal sessions after login and syncs them to TrackVid.`
+98 / 132 characters.
 
-Limit is 75 chars. To change it, edit `name` in `manifest.config.ts`
-and re-upload the ZIP — it is not editable in the dashboard.
-
-### Summary
-Comes from `manifest.config.ts` → `description`. Currently 98/132 chars:
-
-    Captures Myntra, Flipkart, and AJIO seller-portal sessions after login and syncs them to TrackVid.
-
-### Description
+## Description  *(paste this)*
 
 ```
-TrackVid Seller Session Capture connects your Myntra Partner Portal, Flipkart
-Seller Hub, and AJIO Seller Central logins to your TrackVid account, so TrackVid
-can pull your catalogue, order, and returns data without you re-entering a
-password or an OTP every time.
+TrackVid Seller Session Capture links your Myntra, Flipkart, and AJIO seller
+accounts to TrackVid, so TrackVid can keep pulling your catalogue, order, and
+returns data without you re-entering a password or an OTP every day.
 
 HOW IT WORKS
 
 1. Install the extension and open it from the Chrome toolbar.
-2. Enter your TrackVid email and password (or your TrackVid user ID) and click
-   Verify. This signs you in to TrackVid — not to any seller portal.
+2. Enter your TrackVid email and password and click Verify. This signs you in to
+   TrackVid — not to any seller portal.
 3. Log in to Myntra, Flipkart, or AJIO in the same browser exactly as you
-   normally would, including OTP or 2FA.
-4. The moment the login succeeds, the extension reads that portal's session
+   normally would, OTP and 2FA included.
+4. The moment that login succeeds, the extension reads the portal's session
    cookies and sends them to your TrackVid account over HTTPS.
-5. The popup lists every seller account linked to your TrackVid company, when
-   each session was captured, and when it expires — so you can see at a glance
-   which accounts need a fresh login.
+5. The popup shows the live status of the last capture — watching, capturing,
+   syncing, synced, or failed — with a Re-sync button if a sync did not go
+   through.
 
-WHAT IT DOES
+WHY YOU WOULD WANT IT
 
-• Detects a completed seller-portal login automatically. No copy-pasting cookies,
-  no developer tools, no manual export.
-• Supports three portals: Myntra (partner and vendor logins), Flipkart Seller Hub
-  (including the CSRF token its APIs require), and AJIO Seller Central (including
-  the seller profile and point-of-business IDs its APIs require).
-• Shows a live status for each linked seller account: captured, synced, expiring,
-  or expired.
-• Re-sync on demand if a sync fails while you are offline.
-• Optional secure mode holds a capture locally and only uploads it after you
-  close the popup.
+• No manual cookie exports. No developer tools. No sharing your seller-portal
+  password with anyone, including TrackVid.
+• Your login stays exactly as it is today, OTP and two-factor included. The
+  extension only reacts after you have logged in successfully.
+• Works across three portals: Myntra, Flipkart Seller Hub, and AJIO Seller
+  Central.
+• Auto-sync can be switched off if you would rather hold a capture and send it
+  yourself.
+• One TrackVid sign-in is remembered, so day-to-day there is nothing to do
+  except log in to the marketplace as usual.
 
 WHAT DATA IT HANDLES
 
-This extension exists to move seller-portal session cookies to TrackVid, and we
-want to be explicit about that:
+The whole point of this extension is to move seller-portal session cookies to
+TrackVid, so we want to be blunt about what that means:
 
 • It reads session cookies for myntra.com, myntrainfo.com, seller.flipkart.com,
-  and seller.ajio.com — and only those domains — after a login on those sites
+  and seller.ajio.com — and no other site — after a login on those sites
   completes.
-• It sends those cookies, plus the signed-in seller username, to the TrackVid
-  backend over HTTPS.
+• It sends those cookies, plus the seller username they belong to, to the
+  TrackVid backend over HTTPS.
 • It stores your TrackVid email and access token in Chrome's local extension
-  storage so you do not have to sign in on every use. Your TrackVid password is
-  only kept if you tick "Save password".
+  storage so you are not asked to sign in every time. Your TrackVid password is
+  saved only if you tick "Save password on this device".
 • It does not read cookies, browsing history, or page content from any other
   website.
-• It does not show ads, inject content into pages you browse, or sell or share
-  any data with third parties.
+• It shows no ads, injects nothing into the pages you browse, and shares no data
+  with third parties.
 
 WHO IT IS FOR
 
 TrackVid customers running catalogue and order operations across Indian
-marketplaces. A TrackVid account is required — the extension does nothing on its
-own without one.
+marketplaces. A TrackVid account is required — the extension does nothing
+without one.
 
-Questions or trouble linking an account: <SUPPORT EMAIL / URL>
+Trouble linking an account: <SUPPORT EMAIL OR URL>
 ```
 
-Character count: 2,609 of 16,000.
+2,483 / 16,000 characters. Replace `<SUPPORT EMAIL OR URL>` before pasting.
 
-Replace `<SUPPORT EMAIL / URL>` before pasting.
-
-### Category
+## Category
 **Workflow & Planning**
 
-It is a business-operations connector, not a consumer shopping tool. "Shopping"
-reads as a deal/coupon extension to reviewers and would be a worse fit.
+It is a business-operations connector. "Shopping" reads as a coupon/deal
+extension to reviewers and fits worse.
 
-### Language
-**English (United States)** — the whole UI is English. Add other languages only
+## Language
+**English (United States)** — the UI ships English only. Add more languages only
 if you actually ship `_locales`.
 
 ---
 
-## Graphic assets
+# 2. Graphic assets
 
 | Field | Spec | File |
 |---|---|---|
 | Store icon | 128 × 128 PNG | `store-icon-128.png` |
-| Screenshot | 1280 × 800 or 640 × 400, JPEG or 24-bit PNG, no alpha | **not generated — see below** |
-| Small promo tile | 440 × 280, JPEG or 24-bit PNG, no alpha | `promo-small-440x280.jpg` |
-| Marquee promo tile | 1400 × 560, JPEG or 24-bit PNG, no alpha | `promo-marquee-1400x560.jpg` |
-| Promo video | YouTube URL | optional — leave blank |
+| Screenshots (≥1, max 5) | 1280 × 800, no alpha | `screenshot-1-1280x800.jpg` … `screenshot-4-1280x800.jpg` |
+| Small promo tile | 440 × 280, no alpha | `promo-small-440x280.jpg` |
+| Marquee promo tile | 1400 × 560, no alpha | `promo-marquee-1400x560.jpg` |
+| Promo video | YouTube URL | leave blank |
 
-All three generated files are flattened (no alpha channel) and built from
-`Image/squre_logo.svg` and `Image/logo_with_name.svg`. The `_source-*.svg` files
-regenerate them.
+Upload the screenshots in numbered order — they read as a sequence:
 
-### Screenshots (required — at least one)
-These need the real popup, which needs a signed-in TrackVid account, so they
-could not be generated here. Suggested set of 4, each a 1280 × 800 frame with the
-popup screenshot centred on a light background plus a one-line caption:
+1. Set up in under a minute *(unverified home)*
+2. One sign-in, then it runs itself *(configuration screen)*
+3. Log in to the portal exactly as you do today *(watching)*
+4. The session reaches TrackVid instantly *(synced)*
 
-1. **Home, verified, accounts listed** — "See every linked seller account and when
-   its session expires"
-2. **A capture landing** — "Log in as normal. The session is captured the moment
-   login succeeds"
-3. **Settings / Verify** — "Sign in once with your TrackVid account"
-4. **Home, unverified** — "Set up in under a minute"
+Every file is flattened (no alpha) and sized exactly to spec. The popup images
+are real renders of the shipped screens — captured from `screenshots/demo.html`
+with `VITE_DEV_MODE` off, so they match what a public user actually sees. The
+seller name shown, `northlight-retail`, is placeholder demo data.
 
-To capture: open the popup, right-click → Inspect, then in the DevTools window
-use Ctrl/Cmd-Shift-P → "Capture screenshot".
+`_source-*.svg` regenerates any tile or screenshot frame.
+
+Marquee tile note: it is only shown if Google features you on the store home
+page. Harmless to upload, never required.
 
 ---
 
-## Additional fields
+# 3. Additional fields
 
 | Field | Value |
 |---|---|
-| Official URL | `https://trackvid.in` — only selectable after you verify the domain in Google Search Console with the same account |
+| Official URL | `https://trackvid.in` — selectable only after you verify the domain in Google Search Console under the same Google account |
 | Homepage URL | `https://trackvid.in` |
-| Support URL | `https://trackvid.in/support` (or your contact page — must be an http/https URL, not a mailto) |
-| Mature content | **No** |
+| Support URL | `https://trackvid.in/support` — must be http/https, a `mailto:` is rejected |
+| Mature content | **Off** |
 
-Domain inferred from the backend host `api.trackvid.in` — confirm the real
-marketing URL before submitting.
+The domain is inferred from your API host `api.trackvid.in`. Confirm the real
+marketing URL before submitting. If no support page exists yet, point Support URL
+at your contact page — leaving it blank is allowed but costs you review goodwill.
 
 ---
 
-## Before you hit Submit
+# 4. Deployment guide
 
-Two things on other tabs will block or sink the review.
+## Step 0 — Fix the manifest first *(do this before anything else)*
 
-### 1. Narrow the host permissions
-`manifest.config.ts` currently requests:
-
-```
-"https://*/*",        ← every website on the internet
-"http://localhost/*", ← dev only
-"http://127.0.0.1/*"  ← dev only
-```
-
-An extension that reads authentication cookies AND asks for all-URLs access is
-close to a guaranteed rejection under the "request the narrowest permissions"
-policy. Drop all three and add your API host:
+`manifest.config.ts` currently asks for:
 
 ```
+"http://localhost/*",  ← development only
+"http://127.0.0.1/*",  ← development only
+"https://*/*"          ← every website that exists
+```
+
+An extension that reads authentication cookies **and** requests all-URLs access
+is the single most common rejection under Chrome's "request the narrowest
+permissions" policy. The service worker only ever touches the four seller-portal
+hosts and your own API, so replace the block with:
+
+```ts
 host_permissions: [
   "https://*.myntra.com/*",
   "https://*.myntrainfo.com/*",
@@ -169,28 +160,83 @@ host_permissions: [
 ],
 ```
 
-### 2. Privacy tab — required, and reviewed closely
-- **Single purpose**: "Capture the user's own Myntra, Flipkart, and AJIO seller-portal
-  session after login and sync it to their TrackVid account."
-- **Privacy policy URL**: mandatory, because the extension handles authentication
-  information. It must state what cookies are collected, where they are sent, how
-  long they are retained, and how to delete them.
-- **Data usage disclosures**: tick **Authentication information** and **Personally
-  identifiable information** (email). Then certify: not sold to third parties, not
-  used for unrelated purposes, not used for creditworthiness/lending.
-- **Permission justifications**:
-  - `cookies` — read seller-portal session cookies after the user logs in, so the
-    session can be synced to their TrackVid account.
-  - `webRequest` — detect when a seller-portal login request completes, which is
-    the trigger for a capture.
-  - `storage` — store the user's TrackVid credentials and the last capture locally.
-  - `tabs` — find the open AJIO Seller Central tab to read its post-login profile IDs.
-  - `notifications` — tell the user when a capture succeeds or fails.
-  - Host permissions — limited to the three seller portals the extension supports
-    and the TrackVid API it syncs to.
+Then `npm run build` and re-zip. If you already uploaded a package with
+`https://*/*`, upload a corrected one before you submit for review.
 
-### 3. Consider Unlisted visibility
-This is a tool for existing TrackVid customers, not the public. **Unlisted** still
-gets reviewed but is install-by-link only and keeps a cookie-syncing extension out
-of public search results. **Private** (Workspace domain or trusted testers) is
-tighter still if all users share a domain.
+Also consider bumping `version` in `package.json` from `0.1.0` to `1.0.0`. Not
+required, but `0.x` signals pre-release to reviewers.
+
+## Step 1 — Package
+
+```bash
+npm run build
+cd dist && zip -r ../trackvid-extension.zip . && cd ..
+```
+
+Zip the **contents** of `dist/`, not the `dist` folder itself — `manifest.json`
+must sit at the root of the archive.
+
+## Step 2 — Developer account
+- One-time USD 5 registration fee at the Chrome Web Store Developer Dashboard.
+- Verify your contact email. Unverified accounts cannot publish.
+
+## Step 3 — Store listing tab
+Paste sections 1–3 above.
+
+## Step 4 — Privacy tab *(this is what gets you rejected, not the listing)*
+
+- **Single purpose**:
+  "Capture the user's own Myntra, Flipkart, and AJIO seller-portal session after
+  they log in, and sync it to their TrackVid account."
+
+- **Permission justifications** — one line each, they are all required:
+  - `cookies` — read the seller-portal session cookies after the user completes a
+    login, so the session can be synced to their TrackVid account.
+  - `webRequest` — detect when a seller-portal login request completes; that is
+    the trigger for a capture.
+  - `storage` — keep the user's TrackVid sign-in and the last capture locally.
+  - `tabs` — locate the open AJIO Seller Central tab to read the seller profile
+    IDs its API needs.
+  - `notifications` — tell the user when a capture succeeded or failed.
+  - **Host permissions** — limited to the three supported seller portals and the
+    TrackVid API the sessions are synced to.
+
+- **Data usage** — tick **Authentication information** and **Personally
+  identifiable information** (email). Then certify all three boxes: not sold to
+  third parties, not used for anything unrelated to the single purpose, not used
+  for creditworthiness or lending.
+
+- **Privacy policy URL** — mandatory here, because the extension handles
+  authentication information. It must state what is collected (seller-portal
+  session cookies, TrackVid email), where it is sent (api.trackvid.in), how long
+  it is kept, and how a user deletes it. A listing without this is rejected
+  automatically, not by a human.
+
+## Step 5 — Distribution tab
+
+Pick visibility deliberately:
+
+| Option | Fits when |
+|---|---|
+| **Public** | anyone may install; listed in store search |
+| **Unlisted** *(recommended)* | install by direct link only, still reviewed, kept out of public search — right for a tool only your customers use |
+| **Private** | restricted to a Google Workspace domain or a trusted-tester list |
+
+An extension that syncs session cookies has little to gain from public search
+and a lot to lose from casual installs. Unlisted is the sensible default here.
+
+## Step 6 — Submit
+
+Review is typically a few days, and longer for anything touching authentication
+data. Expect a possible follow-up email asking you to justify the `cookies` and
+`webRequest` permissions — answer with the single-purpose sentence above.
+
+## Common rejection reasons for this specific extension
+
+1. **Broad host permissions** — fixed in Step 0.
+2. **Missing or vague privacy policy** — the extension handles auth data, so the
+   policy must name the cookies and the destination host.
+3. **Listing does not disclose the data flow** — the "WHAT DATA IT HANDLES"
+   section of the description exists for exactly this reason. Do not trim it.
+4. **Screenshots that do not show the real product** — the supplied ones are real
+   renders of the shipped UI, so this is covered.
